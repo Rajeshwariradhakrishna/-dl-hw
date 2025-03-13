@@ -21,7 +21,8 @@ class RoadDataset(Dataset):
 
         self.episode_path = Path(episode_path)
 
-        info = np.load(self.episode_path / "info.npz", allow_pickle=True)
+        #info = np.load(self.episode_path / "info.npz", allow_pickle=True)
+        info = np.load("/drive_data/train/cornfield_crossing_00/info.npz", allow_pickle=True)
 
         self.track = Track(**info["track"].item())
         self.frames: dict[str, np.ndarray] = {k: np.stack(v) for k, v in info["frames"].item().items()}
