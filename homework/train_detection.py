@@ -1,8 +1,19 @@
 import torch
 import torch.optim as optim
 import torch.nn as nn
+import os
 from homework.datasets.drive_dataset import load_data
 from models import Detector
+
+# Define log_dir where you want to save the model
+log_dir = "/content/models"
+os.makedirs(log_dir, exist_ok=True)  # Create the directory if it doesn't exist
+
+# Define the save_model function
+def save_model(model, model_name, log_dir):
+    """Save the model's state_dict to the specified directory."""
+    torch.save(model.state_dict(), os.path.join(log_dir, f"{model_name}.th"))
+    print(f"Model saved to {os.path.join(log_dir, f'{model_name}.th')}")
 
 def train(model_name="detector", num_epoch=10, lr=1e-3):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -69,6 +80,5 @@ def train(model_name="detector", num_epoch=10, lr=1e-3):
         avg_val_loss = total_val_loss / len(val_loader)
         print(f"Epoch {epoch+1}: Validation Loss = {avg_val_loss:.4f}")
 
-    # Save the trained model
-    torch.save(model.state_dict(), f"{model_name}.th")
-    print("Model saved successfully!")
+    # Save the trained model using the defined save_model function
+    save_model(model, model_name, log_dir)
