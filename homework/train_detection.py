@@ -5,50 +5,70 @@ from homework.datasets.drive_dataset import load_data
 from models import Detector
 
 def train(model_name="detector", num_epoch=10, lr=1e-3):
-
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # Load dataset
-    #train_loader, val_loader = load_data("drive_data")
-    train_loader = load_data("drive_data/train")
-    val_loader = load_data("drive_data/val")
+    train_loader = load_data("drive_data/train")  
+    val_loader = load_data("drive_data/val")  # Now using validation data
 
     # Initialize model
     model = Detector().to(device)
     model.train()
 
-    # Define loss functions and optimizer
+    # Define loss functions
     criterion_segmentation = nn.CrossEntropyLoss()
-    criterion_depth = nn.L1Loss()  # Mean Absolute Error
-    optimizer = optim.Adam(model.parameters(), lr=0.001)
+    criterion_depth = nn.L1Loss()
 
-    # Training loop
-    for epoch in range(10):
-        total_loss = 0  # Track loss per epoch
-    
+    # Define optimizer
+    optimizer = optim.Adam(model.parameters(), lr=lr)
+
+    for epoch in range(num_epoch):
+        total_train_loss = 0
+
+        # Training loop
+        model.train()
         for batch in train_loader:
             images = batch['image'].to(device)
-            segmentation_labels = batch['track'].to(device).long()  # Ensure long type for CrossEntropyLoss
-            depth_labels = batch['depth'].to(device)
+            segmentation_labels = batch['track'].to(device).long()
+            depth_labels = batch['depth'].to(device).unsqueeze(1)  # Fix shape
 
             optimizer.zero_grad()
-        
-            # Forward pass
             segmentation_pred, depth_pred = model(images)
 
-            # Compute losses
+            # Compute loss
             loss_segmentation = criterion_segmentation(segmentation_pred, segmentation_labels)
-            loss_depth = criterion_depth(depth_pred, depth_labels.unsqueeze(1)) 
+            loss_depth = criterion_depth(depth_pred, depth_labels)
             loss = loss_segmentation + loss_depth
 
-            # Backpropagation
             loss.backward()
             optimizer.step()
 
-            total_loss += loss.item()
+            total_train_loss += loss.item()
 
-        print(f"Epoch {epoch+1}: Loss = {total_loss / len(train_loader)}")
+        avg_train_loss = total_train_loss / len(train_loader)
+        print(f"Epoch {epoch+1}: Train Loss = {avg_train_loss:.4f}")
 
-    # Save the model
-    torch.save(model.state_dict(), "detector.pth")
+        # Validation loop
+        model.eval()
+        total_val_loss = 0
+        with torch.no_grad():
+            for batch in val_loader:
+                images = batch['image'].to(device)
+                segmentation_labels = batch['track'].to(device).long()
+                depth_labels = batch['depth'].to(device).unsqueeze(1)
+
+                segmentation_pred, depth_pred = model(images)
+
+                # Compute validation loss
+                loss_segmentation = criterion_segmentation(segmentation_pred, segmentation_labels)
+                loss_depth = criterion_depth(depth_pred, depth_labels)
+                loss = loss_segmentation + loss_depth
+
+                total_val_loss += loss.item()
+
+        avg_val_loss = total_val_loss / len(val_loader)
+        print(f"Epoch {epoch+1}: Validation Loss = {avg_val_loss:.4f}")
+
+    # Save the trained model
+    torch.save(model.state_dict(), f"{model_name}.pth")
     print("Model saved successfully!")
