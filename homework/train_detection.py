@@ -70,5 +70,5 @@ def train(model_name="detector", num_epoch=10, lr=1e-3):
         print(f"Epoch {epoch+1}: Validation Loss = {avg_val_loss:.4f}")
 
     # Save the trained model
-    torch.save(model.state_dict(), f"{model_name}.pth")
+    torch.save(model.state_dict(), f"{model_name}.th")
     print("Model saved successfully!")
