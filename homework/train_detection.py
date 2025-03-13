@@ -1,7 +1,7 @@
 import torch
 import torch.optim as optim
 import torch.nn as nn
-from datasets.road_dataset import load_data
+from homework.datasets.drive_dataset import load_data
 from models import Detector
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
