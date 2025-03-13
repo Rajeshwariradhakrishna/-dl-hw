@@ -12,8 +12,9 @@ os.makedirs(log_dir, exist_ok=True)  # Create the directory if it doesn't exist
 # Define the save_model function
 def save_model(model, model_name, log_dir):
     """Save the model's state_dict to the specified directory."""
-    torch.save(model.state_dict(), os.path.join(log_dir, f"{model_name}.th"))
-    print(f"Model saved to {os.path.join(log_dir, f'{model_name}.th')}")
+    model_path = os.path.join(log_dir, f"{model_name}.th")
+    torch.save(model.state_dict(), model_path)
+    print(f"Model saved to {model_path}")
 
 def train(model_name="detector", num_epoch=10, lr=1e-3):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
