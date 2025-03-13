@@ -7,7 +7,9 @@ from models import Detector
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # Load dataset
-train_loader, val_loader = load_data("drive_data")
+#train_loader, val_loader = load_data("drive_data")
+train_loader = load_data("drive_data/train")
+val_loader = load_data("drive_data/val")
 
 # Initialize model
 model = Detector().to(device)
