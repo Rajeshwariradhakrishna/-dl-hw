@@ -25,7 +25,7 @@ class RoadDataset(Dataset):
         if not info_path.exists():
             raise FileNotFoundError(f"Missing info.npz in episode: {self.episode_path}")
         
-        info = np.load(self.episode_path / "info.npz")
+        info = np.load(self.episode_path / "info.npz", allow_pickle=True)
 
         self.track = Track(**info["track"].item())
         self.frames: dict[str, np.ndarray] = {k: np.stack(v) for k, v in info["frames"].item().items()}
