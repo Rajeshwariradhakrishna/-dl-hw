@@ -6,7 +6,7 @@ from homework.datasets.drive_dataset import load_data
 from models import Detector
 
 # Define log_dir where you want to save the model
-log_dir = "/content/models"
+log_dir = "/homework"
 os.makedirs(log_dir, exist_ok=True)  # Create the directory if it doesn't exist
 
 # Define the save_model function
