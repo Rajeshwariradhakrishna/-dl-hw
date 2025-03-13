@@ -3,10 +3,10 @@ import torch.optim as optim
 import torch.nn as nn
 import os
 from homework.datasets.drive_dataset import load_data
-from models import Detector
+from models import Detector, HOMEWORK_DIR  
 
 # Define log_dir where you want to save the model
-log_dir = "/homework"
+log_dir = str(HOMEWORK_DIR)
 os.makedirs(log_dir, exist_ok=True)  # Create the directory if it doesn't exist
 
 # Define the save_model function
@@ -21,7 +21,7 @@ def train(model_name="detector", num_epoch=10, lr=1e-3):
 
     # Load dataset
     train_loader = load_data("drive_data/train")  
-    val_loader = load_data("drive_data/val")  # Now using validation data
+    val_loader = load_data("drive_data/val") 
 
     # Initialize model
     model = Detector().to(device)
