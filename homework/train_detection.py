@@ -4,49 +4,51 @@ import torch.nn as nn
 from homework.datasets.drive_dataset import load_data
 from models import Detector
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+def train(model_name="detector", num_epoch=10, lr=1e-3):
 
-# Load dataset
-#train_loader, val_loader = load_data("drive_data")
-train_loader = load_data("drive_data/train")
-val_loader = load_data("drive_data/val")
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# Initialize model
-model = Detector().to(device)
-model.train()
+    # Load dataset
+    #train_loader, val_loader = load_data("drive_data")
+    train_loader = load_data("drive_data/train")
+    val_loader = load_data("drive_data/val")
 
-# Define loss functions and optimizer
-criterion_segmentation = nn.CrossEntropyLoss()
-criterion_depth = nn.L1Loss()  # Mean Absolute Error
-optimizer = optim.Adam(model.parameters(), lr=0.001)
+    # Initialize model
+    model = Detector().to(device)
+    model.train()
 
-# Training loop
-for epoch in range(10):
-    total_loss = 0  # Track loss per epoch
+    # Define loss functions and optimizer
+    criterion_segmentation = nn.CrossEntropyLoss()
+    criterion_depth = nn.L1Loss()  # Mean Absolute Error
+    optimizer = optim.Adam(model.parameters(), lr=0.001)
+
+    # Training loop
+    for epoch in range(10):
+        total_loss = 0  # Track loss per epoch
     
-    for batch in train_loader:
-        images = batch['image'].to(device)
-        segmentation_labels = batch['track'].to(device).long()  # Ensure long type for CrossEntropyLoss
-        depth_labels = batch['depth'].to(device)
+        for batch in train_loader:
+            images = batch['image'].to(device)
+            segmentation_labels = batch['track'].to(device).long()  # Ensure long type for CrossEntropyLoss
+            depth_labels = batch['depth'].to(device)
 
-        optimizer.zero_grad()
+            optimizer.zero_grad()
         
-        # Forward pass
-        segmentation_pred, depth_pred = model(images)
+            # Forward pass
+            segmentation_pred, depth_pred = model(images)
 
-        # Compute losses
-        loss_segmentation = criterion_segmentation(segmentation_pred, segmentation_labels)
-        loss_depth = criterion_depth(depth_pred, depth_labels)
-        loss = loss_segmentation + loss_depth
+            # Compute losses
+            loss_segmentation = criterion_segmentation(segmentation_pred, segmentation_labels)
+            loss_depth = criterion_depth(depth_pred, depth_labels.unsqueeze(1)) 
+            loss = loss_segmentation + loss_depth
 
-        # Backpropagation
-        loss.backward()
-        optimizer.step()
+            # Backpropagation
+            loss.backward()
+            optimizer.step()
 
-        total_loss += loss.item()
+            total_loss += loss.item()
 
-    print(f"Epoch {epoch+1}: Loss = {total_loss / len(train_loader)}")
+        print(f"Epoch {epoch+1}: Loss = {total_loss / len(train_loader)}")
 
-# Save the model
-torch.save(model.state_dict(), "detector.pth")
-print("Model saved successfully!")
+    # Save the model
+    torch.save(model.state_dict(), "detector.pth")
+    print("Model saved successfully!")
