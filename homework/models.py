@@ -103,7 +103,7 @@ class Detector(torch.nn.Module):
 
         # TODO: implement
         # Down-sampling (Encoder) Layers
-         self.encoder1 = nn.Sequential(
+        self.encoder1 = nn.Sequential(
             nn.Conv2d(in_channels, 64, kernel_size=3, stride=1, padding=1),
             nn.BatchNorm2d(64),
             nn.ReLU(inplace=True),
@@ -247,7 +247,7 @@ class Detector(torch.nn.Module):
         pred = logits.argmax(dim=1)
 
         # Optional additional post-processing for depth only if needed
-        depth = raw_depth.squeeze(1)
+        depth = torch.sigmoid(raw_depth).squeeze(1)
 
         return pred, depth
 
