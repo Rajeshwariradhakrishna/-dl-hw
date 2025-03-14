@@ -19,16 +19,26 @@ def save_model(model, model_name, log_dir):
 import torch
 import torch.nn.functional as F
 
+import torch.nn.functional as F
+
 def dice_loss(pred, target, smooth=1e-6):
     """
-    Computes Dice Loss to improve segmentation accuracy.
+    Computes Dice Loss for segmentation.
     Args:
-        pred (tensor): Model predictions (logits).
-        target (tensor): Ground truth mask (binary).
+        pred (tensor): Model output logits, shape (batch_size, num_classes, H, W)
+        target (tensor): Ground truth labels, shape (batch_size, H, W)
     """
     pred = torch.sigmoid(pred)  # Ensure values are between 0 and 1
-    intersection = (pred * target).sum()
-    return 1 - (2. * intersection + smooth) / (pred.sum() + target.sum() + smooth)
+
+    # Convert target to one-hot encoding (assuming num_classes = pred.shape[1])
+    target_one_hot = F.one_hot(target, num_classes=pred.shape[1])  # (B, H, W, C)
+    target_one_hot = target_one_hot.permute(0, 3, 1, 2).float()  # (B, C, H, W)
+
+    intersection = (pred * target_one_hot).sum(dim=(2, 3))
+    union = pred.sum(dim=(2, 3)) + target_one_hot.sum(dim=(2, 3))
+
+    dice = (2. * intersection + smooth) / (union + smooth)
+    return 1 - dice.mean()
 
 def combined_loss(output, target):
     """
@@ -51,6 +61,7 @@ def train(model_name="detector", num_epoch=10, lr=1e-3):
 
     # Define loss functions
     criterion_segmentation = nn.CrossEntropyLoss()
+    #criterion_depth = nn.L1Loss()
     criterion_depth = nn.SmoothL1Loss()
 
     # Define optimizer
