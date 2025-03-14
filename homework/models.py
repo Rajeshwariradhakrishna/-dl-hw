@@ -103,31 +103,22 @@ class Detector(torch.nn.Module):
 
         # TODO: implement
         # Down-sampling (Encoder) Layers
-        # Encoder
-        self.encoder = nn.Sequential(
-            nn.Conv2d(in_channels, 64, kernel_size=3, stride=2, padding=1),
-            nn.ReLU(),
-            nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1),
-            nn.ReLU(),
-            nn.Conv2d(128, 256, kernel_size=3, stride=2, padding=1),
-            nn.ReLU(),
-        )
+        self.conv1 = nn.Conv2d(in_channels, 32, kernel_size=3, stride=2, padding=1)
+        self.conv2 = nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1)
+        self.conv3 = nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1)
+        self.conv4 = nn.Conv2d(128, 256, kernel_size=3, stride=2, padding=1)
 
-        # Decoder
-        self.decoder = nn.Sequential(
-            nn.ConvTranspose2d(256, 128, kernel_size=3, stride=2, padding=1, output_padding=1),
-            nn.ReLU(),
-            nn.ConvTranspose2d(128, 64, kernel_size=3, stride=2, padding=1, output_padding=1),
-            nn.ReLU(),
-            nn.ConvTranspose2d(64, 32, kernel_size=3, stride=2, padding=1, output_padding=1),
-            nn.ReLU(),
-        )
+        # Decoder (Up-sampling)
+        self.upconv1 = nn.ConvTranspose2d(256, 128, kernel_size=3, stride=2, padding=1, output_padding=1)
+        self.upconv2 = nn.ConvTranspose2d(128, 64, kernel_size=3, stride=2, padding=1, output_padding=1)
+        self.upconv3 = nn.ConvTranspose2d(64, 32, kernel_size=3, stride=2, padding=1, output_padding=1)
+        self.upconv4 = nn.ConvTranspose2d(32, 16, kernel_size=3, stride=2, padding=1, output_padding=1)
 
         # Segmentation Head
-        self.segmentation_conv = nn.Conv2d(32, num_classes, kernel_size=1)
+        self.segmentation_conv = nn.Conv2d(16, num_classes, kernel_size=1)
 
         # Depth Head
-        self.depth_conv = nn.Conv2d(32, 1, kernel_size=1)
+        self.depth_conv = nn.Conv2d(16, 1, kernel_size=1)
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """
@@ -146,15 +137,20 @@ class Detector(torch.nn.Module):
         z = (x - self.input_mean[None, :, None, None]) / self.input_std[None, :, None, None]
 
         # TODO: replace with actual forward pass
-        # Encoder
-        features = self.encoder(z)
+         # Encoder: down-sampling the spatial dimensions
+        x1 = torch.relu(self.conv1(z))
+        x2 = torch.relu(self.conv2(x1))
+        x3 = torch.relu(self.conv3(x2))
+        x4 = torch.relu(self.conv4(x3))
 
-        # Decoder
-        decoded = self.decoder(features)
+        # Decoder: up-sampling to recover the original spatial dimensions
+        x = torch.relu(self.upconv1(x4))
+        x = torch.relu(self.upconv2(x))
+        x = torch.relu(self.upconv3(x))
+        x = torch.relu(self.upconv4(x))
 
-        # Segmentation and Depth Heads
-        logits = self.segmentation_conv(decoded)
-        raw_depth = self.depth_conv(decoded)
+        logits = self.segmentation_conv(x)
+        raw_depth = self.depth_conv(x)
 
         return logits, raw_depth
 
@@ -175,7 +171,7 @@ class Detector(torch.nn.Module):
         pred = logits.argmax(dim=1)
 
         # Optional additional post-processing for depth only if needed
-        depth =  torch.sigmoid(raw_depth).squeeze(1) 
+        depth = raw_depth.squeeze(1)
 
         return pred, depth
 
