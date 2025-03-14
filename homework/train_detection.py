@@ -9,19 +9,41 @@ from models import Detector, HOMEWORK_DIR
 log_dir = str(HOMEWORK_DIR)
 os.makedirs(log_dir, exist_ok=True)  # Create the directory if it doesn't exist
 
-# Define the save_model function
+# Save model function
 def save_model(model, model_name, log_dir):
-    """Save the model's state_dict to the specified directory."""
     model_path = os.path.join(log_dir, f"{model_name}.th")
     torch.save(model.state_dict(), model_path)
     print(f"Model saved to {model_path}")
 
-def train(model_name="detector", num_epoch=10, lr=1e-3):
+import torch.nn.functional as F
+import torchvision.transforms as transforms
+
+# Data augmentation to improve segmentation IoU
+data_transforms = transforms.Compose([
+    transforms.RandomHorizontalFlip(),  # Flip images randomly
+    transforms.RandomRotation(10),      # Rotate images slightly
+    transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2),  
+    transforms.ToTensor()
+])
+
+# Dice Loss for better segmentation
+def dice_loss(pred, target, smooth=1e-6):
+    pred = torch.sigmoid(pred)  # Ensure values are between 0 and 1
+    intersection = (pred * target).sum()
+    return 1 - (2. * intersection + smooth) / (pred.sum() + target.sum() + smooth)
+
+# Combined Loss for segmentation
+def combined_loss(output, target):
+    ce_loss = F.cross_entropy(output, target)
+    dice = dice_loss(output, target)
+    return ce_loss + dice  # Combining both losses
+
+def train(model_name="detector", num_epoch=20, lr=1e-3, batch_size=16):  # Increased epochs, reduced batch size
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # Load dataset
-    train_loader = load_data("drive_data/train")  
-    val_loader = load_data("drive_data/val") 
+    # Load dataset with data augmentation
+    train_loader = load_data("drive_data/train", transform=data_transforms, batch_size=batch_size)  
+    val_loader = load_data("drive_data/val", batch_size=batch_size)
 
     # Initialize model
     model = Detector().to(device)
@@ -29,7 +51,7 @@ def train(model_name="detector", num_epoch=10, lr=1e-3):
 
     # Define loss functions
     criterion_segmentation = nn.CrossEntropyLoss()
-    criterion_depth = nn.L1Loss()
+    criterion_depth = nn.L1Loss()  # Use L1 Loss for better depth estimation
 
     # Define optimizer
     optimizer = optim.Adam(model.parameters(), lr=lr)
@@ -47,8 +69,8 @@ def train(model_name="detector", num_epoch=10, lr=1e-3):
             optimizer.zero_grad()
             segmentation_pred, depth_pred = model(images)
 
-            # Compute loss
-            loss_segmentation = criterion_segmentation(segmentation_pred, segmentation_labels)
+            # Compute loss (combined loss for segmentation)
+            loss_segmentation = combined_loss(segmentation_pred, segmentation_labels)
             loss_depth = criterion_depth(depth_pred, depth_labels)
             loss = loss_segmentation + loss_depth
 
@@ -72,7 +94,7 @@ def train(model_name="detector", num_epoch=10, lr=1e-3):
                 segmentation_pred, depth_pred = model(images)
 
                 # Compute validation loss
-                loss_segmentation = criterion_segmentation(segmentation_pred, segmentation_labels)
+                loss_segmentation = combined_loss(segmentation_pred, segmentation_labels)
                 loss_depth = criterion_depth(depth_pred, depth_labels)
                 loss = loss_segmentation + loss_depth
 
@@ -80,6 +102,10 @@ def train(model_name="detector", num_epoch=10, lr=1e-3):
 
         avg_val_loss = total_val_loss / len(val_loader)
         print(f"Epoch {epoch+1}: Validation Loss = {avg_val_loss:.4f}")
+
+        # Debugging: Print some predictions
+        if epoch % 5 == 0:  # Every 5 epochs, print some failures
+            print(f"Sample IoU: {segmentation_pred[0].max().item():.3f}, Depth Error: {loss_depth.item():.3f}")
 
     # Save the trained model using the defined save_model function
     save_model(model, model_name, log_dir)
