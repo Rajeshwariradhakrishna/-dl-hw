@@ -4,6 +4,7 @@ import torch.nn as nn
 import os
 from homework.datasets.drive_dataset import load_data
 from models import Detector, HOMEWORK_DIR  
+from torch.nn.functional import binary_cross_entropy_with_logits
 
 # Define log_dir where you want to save the model
 log_dir = str(HOMEWORK_DIR)
@@ -16,20 +17,25 @@ def save_model(model, model_name, log_dir):
     torch.save(model.state_dict(), model_path)
     print(f"Model saved to {model_path}")
 
+def dice_loss(pred, target, smooth=1.0):
+    """
+    Dice Loss for segmentation.
+    """
+    pred = torch.sigmoid(pred)
+    intersection = (pred * target).sum()
+    union = pred.sum() + target.sum()
+    return 1 - (2 * intersection + smooth) / (union + smooth)
+
 def train(model_name="detector", num_epoch=10, lr=1e-3):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # Load dataset
-    train_loader = load_data("drive_data/train")  
-    val_loader = load_data("drive_data/val") 
+    train_loader = load_data("drive_data/train")
+    val_loader = load_data("drive_data/val")
 
     # Initialize model
     model = Detector().to(device)
     model.train()
-
-    # Define loss functions
-    criterion_segmentation = nn.CrossEntropyLoss()
-    criterion_depth = nn.L1Loss()
 
     # Define optimizer
     optimizer = optim.Adam(model.parameters(), lr=lr)
@@ -41,15 +47,15 @@ def train(model_name="detector", num_epoch=10, lr=1e-3):
         model.train()
         for batch in train_loader:
             images = batch['image'].to(device)
-            segmentation_labels = batch['track'].to(device).long()
-            depth_labels = batch['depth'].to(device).unsqueeze(1)  # Fix shape
+            segmentation_labels = batch['track'].to(device).float()
+            depth_labels = batch['depth'].to(device).unsqueeze(1)
 
             optimizer.zero_grad()
             segmentation_pred, depth_pred = model(images)
 
-            # Compute loss
-            loss_segmentation = criterion_segmentation(segmentation_pred, segmentation_labels)
-            loss_depth = criterion_depth(depth_pred, depth_labels)
+            # Compute losses
+            loss_segmentation = dice_loss(segmentation_pred, segmentation_labels)
+            loss_depth = nn.L1Loss()(depth_pred, depth_labels)
             loss = loss_segmentation + loss_depth
 
             loss.backward()
@@ -66,14 +72,14 @@ def train(model_name="detector", num_epoch=10, lr=1e-3):
         with torch.no_grad():
             for batch in val_loader:
                 images = batch['image'].to(device)
-                segmentation_labels = batch['track'].to(device).long()
+                segmentation_labels = batch['track'].to(device).float()
                 depth_labels = batch['depth'].to(device).unsqueeze(1)
 
                 segmentation_pred, depth_pred = model(images)
 
                 # Compute validation loss
-                loss_segmentation = criterion_segmentation(segmentation_pred, segmentation_labels)
-                loss_depth = criterion_depth(depth_pred, depth_labels)
+                loss_segmentation = dice_loss(segmentation_pred, segmentation_labels)
+                loss_depth = nn.L1Loss()(depth_pred, depth_labels)
                 loss = loss_segmentation + loss_depth
 
                 total_val_loss += loss.item()
@@ -81,5 +87,5 @@ def train(model_name="detector", num_epoch=10, lr=1e-3):
         avg_val_loss = total_val_loss / len(val_loader)
         print(f"Epoch {epoch+1}: Validation Loss = {avg_val_loss:.4f}")
 
-    # Save the trained model using the defined save_model function
+    # Save the trained model
     save_model(model, model_name, log_dir)
