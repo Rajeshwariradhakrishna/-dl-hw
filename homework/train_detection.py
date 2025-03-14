@@ -16,6 +16,28 @@ def save_model(model, model_name, log_dir):
     torch.save(model.state_dict(), model_path)
     print(f"Model saved to {model_path}")
 
+import torch
+import torch.nn.functional as F
+
+def dice_loss(pred, target, smooth=1e-6):
+    """
+    Computes Dice Loss to improve segmentation accuracy.
+    Args:
+        pred (tensor): Model predictions (logits).
+        target (tensor): Ground truth mask (binary).
+    """
+    pred = torch.sigmoid(pred)  # Ensure values are between 0 and 1
+    intersection = (pred * target).sum()
+    return 1 - (2. * intersection + smooth) / (pred.sum() + target.sum() + smooth)
+
+def combined_loss(output, target):
+    """
+    Combined Cross-Entropy Loss + Dice Loss.
+    """
+    ce_loss = F.cross_entropy(output, target)
+    dice = dice_loss(output, target)
+    return ce_loss + dice  # Combining both losses
+
 def train(model_name="detector", num_epoch=10, lr=1e-3):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
