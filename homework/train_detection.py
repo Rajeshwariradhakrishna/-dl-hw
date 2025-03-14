@@ -16,15 +16,6 @@ def save_model(model, model_name, log_dir):
     torch.save(model.state_dict(), model_path)
     print(f"Model saved to {model_path}")
 
-def dice_loss(pred, target, smooth=1.0):
-    """
-    Dice Loss for segmentation.
-    """
-    pred = torch.sigmoid(pred)
-    intersection = (pred * target).sum()
-    union = pred.sum() + target.sum()
-    return 1 - (2 * intersection + smooth) / (union + smooth)
-
 def train(model_name="detector", num_epoch=10, lr=1e-3):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -36,6 +27,10 @@ def train(model_name="detector", num_epoch=10, lr=1e-3):
     model = Detector().to(device)
     model.train()
 
+    # Define loss functions
+    criterion_segmentation = nn.CrossEntropyLoss()
+    criterion_depth = nn.L1Loss()
+
     # Define optimizer
     optimizer = optim.Adam(model.parameters(), lr=lr)
 
@@ -46,15 +41,15 @@ def train(model_name="detector", num_epoch=10, lr=1e-3):
         model.train()
         for batch in train_loader:
             images = batch['image'].to(device)
-            segmentation_labels = batch['track'].to(device).float()
+            segmentation_labels = batch['track'].to(device).long()  # Class indices
             depth_labels = batch['depth'].to(device).unsqueeze(1)
 
             optimizer.zero_grad()
             segmentation_pred, depth_pred = model(images)
 
             # Compute losses
-            loss_segmentation = dice_loss(segmentation_pred, segmentation_labels)
-            loss_depth = nn.L1Loss()(depth_pred, depth_labels)
+            loss_segmentation = criterion_segmentation(segmentation_pred, segmentation_labels)
+            loss_depth = criterion_depth(depth_pred, depth_labels)
             loss = loss_segmentation + loss_depth
 
             loss.backward()
@@ -71,14 +66,14 @@ def train(model_name="detector", num_epoch=10, lr=1e-3):
         with torch.no_grad():
             for batch in val_loader:
                 images = batch['image'].to(device)
-                segmentation_labels = batch['track'].to(device).float()
+                segmentation_labels = batch['track'].to(device).long()  # Class indices
                 depth_labels = batch['depth'].to(device).unsqueeze(1)
 
                 segmentation_pred, depth_pred = model(images)
 
                 # Compute validation loss
-                loss_segmentation = dice_loss(segmentation_pred, segmentation_labels)
-                loss_depth = nn.L1Loss()(depth_pred, depth_labels)
+                loss_segmentation = criterion_segmentation(segmentation_pred, segmentation_labels)
+                loss_depth = criterion_depth(depth_pred, depth_labels)
                 loss = loss_segmentation + loss_depth
 
                 total_val_loss += loss.item()
