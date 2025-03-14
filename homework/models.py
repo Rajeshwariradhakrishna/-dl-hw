@@ -101,8 +101,9 @@ class Detector(torch.nn.Module):
         self.register_buffer("input_mean", torch.as_tensor(INPUT_MEAN))
         self.register_buffer("input_std", torch.as_tensor(INPUT_STD))
 
-        # TODO: implement
-         # Down-sampling (Encoder) Layers
+        # TODO  : implement
+        # Down-sampling (Encoder) Layers
+            # Encoder (Down-sampling)
         self.conv1 = nn.Conv2d(in_channels, 32, kernel_size=3, stride=2, padding=1)
         self.conv2 = nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1)
         self.conv3 = nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1)
