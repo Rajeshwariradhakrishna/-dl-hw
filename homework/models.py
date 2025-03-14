@@ -146,7 +146,7 @@ class Detector(torch.nn.Module):
         z = (x - self.input_mean[None, :, None, None]) / self.input_std[None, :, None, None]
 
         # TODO: replace with actual forward pass
-         # Encoder
+        # Encoder
         features = self.encoder(z)
 
         # Decoder
