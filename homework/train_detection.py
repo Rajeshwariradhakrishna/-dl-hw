@@ -16,7 +16,7 @@ def save_model(model, model_name, log_dir):
     torch.save(model.state_dict(), model_path)
     print(f"Model saved to {model_path}")
 
-# 🔹 **Tversky Loss for better IoU optimization**
+# 🔹 **Tversky Loss**
 class TverskyLoss(nn.Module):
     def __init__(self, alpha=0.7, beta=0.3, smooth=1e-6):
         super(TverskyLoss, self).__init__()
@@ -32,7 +32,7 @@ class TverskyLoss(nn.Module):
         tversky = (true_pos + self.smooth) / (true_pos + self.alpha * false_neg + self.beta * false_pos + self.smooth)
         return 1 - tversky.mean()
 
-# 🔹 **Lovász Softmax Loss to directly optimize IoU**
+# 🔹 **Lovász Softmax Loss**
 def lovasz_softmax_loss(preds, targets):
     preds = torch.softmax(preds, dim=1)
     targets = targets.float()
@@ -41,9 +41,22 @@ def lovasz_softmax_loss(preds, targets):
     jaccard_loss = 1 - intersection / (union + 1e-6)
     return jaccard_loss.mean()
 
-# 🔹 **Data Augmentation**
+# 🔹 **Focal Loss**
+class FocalLoss(nn.Module):
+    def __init__(self, alpha=0.8, gamma=2):
+        super(FocalLoss, self).__init__()
+        self.alpha = alpha
+        self.gamma = gamma
+
+    def forward(self, preds, targets):
+        preds = torch.sigmoid(preds)
+        pt = preds * targets + (1 - preds) * (1 - targets)
+        loss = -self.alpha * (1 - pt) ** self.gamma * torch.log(pt + 1e-6)
+        return loss.mean()
+
+# 🔹 **Updated Data Augmentation**
 data_transforms = transforms.Compose([
-    transforms.Resize((256, 256)),  # 🔹 Higher resolution for better IoU
+    transforms.Resize((512, 512)),  # 🔹 Increased resolution for better IoU
     transforms.RandomHorizontalFlip(),
     transforms.RandomRotation(10),
     transforms.ColorJitter(brightness=0.2, contrast=0.2),
@@ -80,7 +93,10 @@ def train(model_name="detector", num_epoch=40, lr=5e-4, batch_size=8):
             optimizer.zero_grad()
             segmentation_pred, depth_pred = model(images)
 
-            loss_segmentation = lovasz_softmax_loss(segmentation_pred, segmentation_labels) + TverskyLoss()(segmentation_pred, segmentation_labels)
+            # 🔹 **Updated Segmentation Loss (Combining Lovász, Tversky, and Focal Loss)**
+            loss_segmentation = (lovasz_softmax_loss(segmentation_pred, segmentation_labels) + 
+                                 TverskyLoss()(segmentation_pred, segmentation_labels) + 
+                                 FocalLoss()(segmentation_pred, segmentation_labels))
             loss_depth = criterion_depth(depth_pred, depth_labels)
             loss = loss_segmentation + loss_depth
 
@@ -103,7 +119,9 @@ def train(model_name="detector", num_epoch=40, lr=5e-4, batch_size=8):
 
                 segmentation_pred, depth_pred = model(images)
 
-                loss_segmentation = lovasz_softmax_loss(segmentation_pred, segmentation_labels) + TverskyLoss()(segmentation_pred, segmentation_labels)
+                loss_segmentation = (lovasz_softmax_loss(segmentation_pred, segmentation_labels) + 
+                                     TverskyLoss()(segmentation_pred, segmentation_labels) + 
+                                     FocalLoss()(segmentation_pred, segmentation_labels))
                 loss_depth = criterion_depth(depth_pred, depth_labels)
                 loss = loss_segmentation + loss_depth
 
