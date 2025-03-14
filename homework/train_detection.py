@@ -2,47 +2,68 @@ import torch
 import torch.optim as optim
 import torch.nn as nn
 import os
+import torch.nn.functional as F
+import torchvision.transforms as transforms
 from homework.datasets.drive_dataset import load_data
 from models import Detector, HOMEWORK_DIR  
 
-# Define log_dir where you want to save the model
+# Set logging directory
 log_dir = str(HOMEWORK_DIR)
-os.makedirs(log_dir, exist_ok=True)  # Create the directory if it doesn't exist
+os.makedirs(log_dir, exist_ok=True)
 
-# Save model function
 def save_model(model, model_name, log_dir):
+    """ Save the trained model """
     model_path = os.path.join(log_dir, f"{model_name}.th")
     torch.save(model.state_dict(), model_path)
     print(f"Model saved to {model_path}")
 
-import torch.nn.functional as F
-import torchvision.transforms as transforms
-
-# Data augmentation to improve segmentation IoU
+# 🔹 **Data Augmentation for Segmentation Improvement**
 data_transforms = transforms.Compose([
-    transforms.RandomHorizontalFlip(),  # Flip images randomly
-    transforms.RandomRotation(10),      # Rotate images slightly
-    transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2),  
+    transforms.RandomHorizontalFlip(),
+    transforms.RandomRotation(10),
+    transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2),
+    transforms.GaussianBlur(3),
     transforms.ToTensor()
 ])
 
-# Dice Loss for better segmentation
-def dice_loss(pred, target, smooth=1e-6):
-    pred = torch.sigmoid(pred)  # Ensure values are between 0 and 1
-    intersection = (pred * target).sum()
-    return 1 - (2. * intersection + smooth) / (pred.sum() + target.sum() + smooth)
+# 🔹 **Soft Dice Loss for better IoU performance**
+def soft_dice_loss(pred, target, smooth=1e-6):
+    pred = torch.sigmoid(pred)  
+    intersection = (pred * target).sum(dim=(1, 2, 3))
+    union = pred.sum(dim=(1, 2, 3)) + target.sum(dim=(1, 2, 3))
+    dice = (2. * intersection + smooth) / (union + smooth)
+    return 1 - dice.mean()
 
-# Combined Loss for segmentation
-def combined_loss(output, target):
+# 🔹 **Focal Loss to balance class distribution in segmentation**
+class FocalLoss(nn.Module):
+    def __init__(self, alpha=0.8, gamma=2):
+        super(FocalLoss, self).__init__()
+        self.alpha = alpha
+        self.gamma = gamma
+
+    def forward(self, inputs, targets):
+        ce_loss = F.cross_entropy(inputs, targets, reduction='none')
+        p_t = torch.exp(-ce_loss)
+        focal_loss = self.alpha * (1 - p_t) ** self.gamma * ce_loss
+        return focal_loss.mean()
+
+# 🔹 **Smooth L1 Loss (Huber Loss) for Depth Error**
+def depth_loss(pred, target):
+    return F.smooth_l1_loss(pred, target, beta=0.05)  
+
+# 🔹 **Combined Loss for Segmentation**
+def combined_segmentation_loss(output, target):
     ce_loss = F.cross_entropy(output, target)
-    dice = dice_loss(output, target)
-    return ce_loss + dice  # Combining both losses
+    dice = soft_dice_loss(output, target)
+    focal = FocalLoss()(output, target)
+    return ce_loss + dice + focal  # Weighted combination
 
-def train(model_name="detector", num_epoch=20, lr=1e-3, batch_size=16):  # Increased epochs, reduced batch size
+# 🔹 **Train Function**
+def train(model_name="detector", num_epoch=30, lr=5e-4, batch_size=8):  # 🔹 Reduced batch size for stability
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # Load dataset with data augmentation
-    train_loader = load_data("drive_data/train", transform=data_transforms, batch_size=batch_size)  
+    # Load dataset with augmentation
+    train_loader = load_data("drive_data/train", transform=data_transforms, batch_size=batch_size)
     val_loader = load_data("drive_data/val", batch_size=batch_size)
 
     # Initialize model
@@ -50,27 +71,25 @@ def train(model_name="detector", num_epoch=20, lr=1e-3, batch_size=16):  # Incre
     model.train()
 
     # Define loss functions
-    criterion_segmentation = nn.CrossEntropyLoss()
-    criterion_depth = nn.L1Loss()  # Use L1 Loss for better depth estimation
+    criterion_depth = depth_loss  # Using Smooth L1 Loss for depth estimation
 
     # Define optimizer
     optimizer = optim.Adam(model.parameters(), lr=lr)
 
     for epoch in range(num_epoch):
         total_train_loss = 0
-
-        # Training loop
         model.train()
+
         for batch in train_loader:
             images = batch['image'].to(device)
             segmentation_labels = batch['track'].to(device).long()
-            depth_labels = batch['depth'].to(device).unsqueeze(1)  # Fix shape
+            depth_labels = batch['depth'].to(device).unsqueeze(1)
 
             optimizer.zero_grad()
             segmentation_pred, depth_pred = model(images)
 
-            # Compute loss (combined loss for segmentation)
-            loss_segmentation = combined_loss(segmentation_pred, segmentation_labels)
+            # Compute loss
+            loss_segmentation = combined_segmentation_loss(segmentation_pred, segmentation_labels)
             loss_depth = criterion_depth(depth_pred, depth_labels)
             loss = loss_segmentation + loss_depth
 
@@ -82,7 +101,7 @@ def train(model_name="detector", num_epoch=20, lr=1e-3, batch_size=16):  # Incre
         avg_train_loss = total_train_loss / len(train_loader)
         print(f"Epoch {epoch+1}: Train Loss = {avg_train_loss:.4f}")
 
-        # Validation loop
+        # Validation
         model.eval()
         total_val_loss = 0
         with torch.no_grad():
@@ -93,8 +112,7 @@ def train(model_name="detector", num_epoch=20, lr=1e-3, batch_size=16):  # Incre
 
                 segmentation_pred, depth_pred = model(images)
 
-                # Compute validation loss
-                loss_segmentation = combined_loss(segmentation_pred, segmentation_labels)
+                loss_segmentation = combined_segmentation_loss(segmentation_pred, segmentation_labels)
                 loss_depth = criterion_depth(depth_pred, depth_labels)
                 loss = loss_segmentation + loss_depth
 
@@ -103,9 +121,8 @@ def train(model_name="detector", num_epoch=20, lr=1e-3, batch_size=16):  # Incre
         avg_val_loss = total_val_loss / len(val_loader)
         print(f"Epoch {epoch+1}: Validation Loss = {avg_val_loss:.4f}")
 
-        # Debugging: Print some predictions
-        if epoch % 5 == 0:  # Every 5 epochs, print some failures
+        # 🔹 Debugging every 5 epochs
+        if epoch % 5 == 0:
             print(f"Sample IoU: {segmentation_pred[0].max().item():.3f}, Depth Error: {loss_depth.item():.3f}")
 
-    # Save the trained model using the defined save_model function
     save_model(model, model_name, log_dir)
