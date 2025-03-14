@@ -4,7 +4,6 @@ import torch.nn as nn
 import os
 from homework.datasets.drive_dataset import load_data
 from models import Detector, HOMEWORK_DIR  
-from torch.nn.functional import binary_cross_entropy_with_logits
 
 # Define log_dir where you want to save the model
 log_dir = str(HOMEWORK_DIR)
