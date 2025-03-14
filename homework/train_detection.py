@@ -51,7 +51,7 @@ def train(model_name="detector", num_epoch=10, lr=1e-3):
 
     # Define loss functions
     criterion_segmentation = nn.CrossEntropyLoss()
-    criterion_depth = nn.L1Loss()
+    criterion_depth = nn.SmoothL1Loss()
 
     # Define optimizer
     optimizer = optim.Adam(model.parameters(), lr=lr)
@@ -70,7 +70,7 @@ def train(model_name="detector", num_epoch=10, lr=1e-3):
             segmentation_pred, depth_pred = model(images)
 
             # Compute loss
-            loss_segmentation = criterion_segmentation(segmentation_pred, segmentation_labels)
+            loss_segmentation = combined_loss(segmentation_pred, segmentation_labels)
             loss_depth = criterion_depth(depth_pred, depth_labels)
             loss = loss_segmentation + loss_depth
 
