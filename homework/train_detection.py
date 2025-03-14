@@ -2,7 +2,7 @@ import torch
 from torch.utils.data import DataLoader
 from torch.optim import Adam
 from torchvision import datasets, transforms
-from model import Detector
+from models import Detector
 import time
 
 def train_detector():
