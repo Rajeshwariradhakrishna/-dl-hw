@@ -4,6 +4,7 @@ import torch.nn as nn
 import os
 from homework.datasets.drive_dataset import load_data
 from models import Detector, HOMEWORK_DIR  
+from torchvision import transforms
 
 # Define log_dir where you want to save the model
 log_dir = str(HOMEWORK_DIR)
