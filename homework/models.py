@@ -101,24 +101,85 @@ class Detector(torch.nn.Module):
         self.register_buffer("input_mean", torch.as_tensor(INPUT_MEAN))
         self.register_buffer("input_std", torch.as_tensor(INPUT_STD))
 
-        # TODO: implement
-         # Down-sampling (Encoder) Layers
-        self.conv1 = nn.Conv2d(in_channels, 32, kernel_size=3, stride=2, padding=1)
-        self.conv2 = nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1)
-        self.conv3 = nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1)
-        self.conv4 = nn.Conv2d(128, 256, kernel_size=3, stride=2, padding=1)
+        # TODO  : implement
+        # Down-sampling (Encoder) Layers
+        # Encoder (Down-sampling)
+        self.encoder1 = nn.Sequential(
+            nn.Conv2d(in_channels, 32, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(32),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(32, 32, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(32),
+            nn.ReLU(inplace=True),
+        )
+        self.pool1 = nn.MaxPool2d(kernel_size=2, stride=2)
 
-        # Decoder (Up-sampling)
-        self.upconv1 = nn.ConvTranspose2d(256, 128, kernel_size=3, stride=2, padding=1, output_padding=1)
-        self.upconv2 = nn.ConvTranspose2d(128 + 128, 64, kernel_size=3, stride=2, padding=1, output_padding=1)
-        self.upconv3 = nn.ConvTranspose2d(64 + 64, 32, kernel_size=3, stride=2, padding=1, output_padding=1)
-        self.upconv4 = nn.ConvTranspose2d(32 + 32, 16, kernel_size=3, stride=2, padding=1, output_padding=1)
+        self.encoder2 = nn.Sequential(
+            nn.Conv2d(32, 64, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(64),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(64, 64, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(64),
+            nn.ReLU(inplace=True),
+        )
+        self.pool2 = nn.MaxPool2d(kernel_size=2, stride=2)
+
+        self.encoder3 = nn.Sequential(
+            nn.Conv2d(64, 128, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(128),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(128, 128, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(128),
+            nn.ReLU(inplace=True),
+        )
+        self.pool3 = nn.MaxPool2d(kernel_size=2, stride=2)
+
+        # Bottleneck
+        self.bottleneck = nn.Sequential(
+            nn.Conv2d(128, 256, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(256),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(256, 256, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(256),
+            nn.ReLU(inplace=True),
+        )
+
+        # Decoder (Up-sampling with skip connections)
+        self.upconv3 = nn.ConvTranspose2d(256, 128, kernel_size=2, stride=2)
+        self.decoder3 = nn.Sequential(
+            nn.Conv2d(256, 128, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(128),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(128, 128, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(128),
+            nn.ReLU(inplace=True),
+        )
+
+        self.upconv2 = nn.ConvTranspose2d(128, 64, kernel_size=2, stride=2)
+        self.decoder2 = nn.Sequential(
+            nn.Conv2d(128, 64, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(64),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(64, 64, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(64),
+            nn.ReLU(inplace=True),
+        )
+
+        self.upconv1 = nn.ConvTranspose2d(64, 32, kernel_size=2, stride=2)
+        self.decoder1 = nn.Sequential(
+            nn.Conv2d(64, 32, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(32),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(32, 32, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(32),
+            nn.ReLU(inplace=True),
+        )
 
         # Segmentation Head
-        self.segmentation_conv = nn.Conv2d(16, num_classes, kernel_size=1)
+        self.segmentation_conv = nn.Conv2d(32, num_classes, kernel_size=1)
 
         # Depth Head
-        self.depth_conv = nn.Conv2d(16, 1, kernel_size=1)
+        self.depth_conv = nn.Conv2d(32, 1, kernel_size=1)
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """
@@ -138,22 +199,35 @@ class Detector(torch.nn.Module):
 
         # TODO: replace with actual forward pass
          # Encoder: down-sampling the spatial dimensions
-        x1 = torch.relu(self.conv1(z))
-        x2 = torch.relu(self.conv2(x1))
-        x3 = torch.relu(self.conv3(x2))
-        x4 = torch.relu(self.conv4(x3))
+         # Encoder
+        e1 = self.encoder1(z)
+        p1 = self.pool1(e1)
 
-        # Decoder with skip connections: up-sampling to recover the original spatial dimensions
-        x = torch.relu(self.upconv1(x4))
-        x = torch.cat([x, x3], dim=1)  # Skip connection
-        x = torch.relu(self.upconv2(x))
-        x = torch.cat([x, x2], dim=1)  # Skip connection
-        x = torch.relu(self.upconv3(x))
-        x = torch.cat([x, x1], dim=1)  # Skip connection
-        x = torch.relu(self.upconv4(x))
+        e2 = self.encoder2(p1)
+        p2 = self.pool2(e2)
 
-        logits = self.segmentation_conv(x)
-        raw_depth = self.depth_conv(x)
+        e3 = self.encoder3(p2)
+        p3 = self.pool3(e3)
+
+        # Bottleneck
+        bottleneck = self.bottleneck(p3)
+
+        # Decoder with skip connections
+        d3 = self.upconv3(bottleneck)
+        d3 = torch.cat([d3, e3], dim=1)  # Skip connection
+        d3 = self.decoder3(d3)
+
+        d2 = self.upconv2(d3)
+        d2 = torch.cat([d2, e2], dim=1)  # Skip connection
+        d2 = self.decoder2(d2)
+
+        d1 = self.upconv1(d2)
+        d1 = torch.cat([d1, e1], dim=1)  # Skip connection
+        d1 = self.decoder1(d1)
+
+        # Segmentation and Depth Heads
+        logits = self.segmentation_conv(d1)
+        raw_depth = self.depth_conv(d1)
 
         return logits, raw_depth
 
@@ -174,7 +248,7 @@ class Detector(torch.nn.Module):
         pred = logits.argmax(dim=1)
 
         # Optional additional post-processing for depth only if needed
-        depth = raw_depth.squeeze(1)
+        depth = torch.sigmoid(raw_depth).squeeze(1)  # Normalize depth to [0, 1]
 
         return pred, depth
 
