@@ -59,8 +59,8 @@ def depth_loss(pred, target):
 def train(model_name="detector", num_epoch=40, lr=5e-4, batch_size=8):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    train_loader = load_data("drive_data/train", transform=data_transforms, batch_size=batch_size)
-    val_loader = load_data("drive_data/val", batch_size=batch_size)
+    train_loader = load_data("drive_data/train")
+    val_loader = load_data("drive_data/val")
 
     model = Detector().to(device)
     model.train()
