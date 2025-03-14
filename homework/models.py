@@ -1,4 +1,5 @@
 from pathlib import Path
+
 import torch
 import torch.nn as nn
 
@@ -25,6 +26,7 @@ class Classifier(nn.Module):
         self.register_buffer("input_mean", torch.as_tensor(INPUT_MEAN))
         self.register_buffer("input_std", torch.as_tensor(INPUT_STD))
 
+        # TODO: implement
         # Convolutional Layers with BatchNorm and ReLU
         self.conv1 = nn.Conv2d(in_channels, 32, kernel_size=3, padding=1)
         self.bn1 = nn.BatchNorm2d(32)
@@ -47,8 +49,10 @@ class Classifier(nn.Module):
         Returns:
             tensor (b, num_classes) logits
         """
+        # optional: normalizes the input
         z = (x - self.input_mean[None, :, None, None]) / self.input_std[None, :, None, None]
 
+        # TODO: replace with actual forward pass
         # Convolutional layers with ReLU and BatchNorm
         x = self.pool(torch.relu(self.bn1(self.conv1(z))))
         x = self.pool(torch.relu(self.bn2(self.conv2(x))))
@@ -59,6 +63,7 @@ class Classifier(nn.Module):
 
         # Fully connected layers
         x = torch.relu(self.fc1(x))
+        #logits = torch.randn(x.size(0), 6)
         logits = self.fc2(x)
 
         return logits
@@ -66,6 +71,8 @@ class Classifier(nn.Module):
     def predict(self, x: torch.Tensor) -> torch.Tensor:
         """
         Used for inference, returns class labels
+        This is what the AccuracyMetric uses as input (this is what the grader will use!).
+        You should not have to modify this function.
 
         Args:
             x (torch.FloatTensor): image with shape (b, 3, h, w) and vals in [0, 1]
@@ -94,6 +101,7 @@ class Detector(torch.nn.Module):
         self.register_buffer("input_mean", torch.as_tensor(INPUT_MEAN))
         self.register_buffer("input_std", torch.as_tensor(INPUT_STD))
 
+        # TODO: implement
         # Down-sampling (Encoder) Layers
         self.conv1 = nn.Conv2d(in_channels, 32, kernel_size=3, stride=2, padding=1)
         self.conv2 = nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1)
@@ -115,6 +123,7 @@ class Detector(torch.nn.Module):
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Used in training, takes an image and returns raw logits and raw depth.
+        This is what the loss functions use as input.
 
         Args:
             x (torch.FloatTensor): image with shape (b, 3, h, w) and vals in [0, 1]
@@ -124,9 +133,11 @@ class Detector(torch.nn.Module):
                 - logits (b, num_classes, h, w)
                 - depth (b, h, w)
         """
+        # optional: normalizes the input
         z = (x - self.input_mean[None, :, None, None]) / self.input_std[None, :, None, None]
 
-        # Encoder: down-sampling the spatial dimensions
+        # TODO: replace with actual forward pass
+         # Encoder: down-sampling the spatial dimensions
         x1 = torch.relu(self.conv1(z))
         x2 = torch.relu(self.conv2(x1))
         x3 = torch.relu(self.conv3(x2))
@@ -146,6 +157,7 @@ class Detector(torch.nn.Module):
     def predict(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Used for inference, takes an image and returns class labels and normalized depth.
+        This is what the metrics use as input (this is what the grader will use!).
 
         Args:
             x (torch.FloatTensor): image with shape (b, 3, h, w) and vals in [0, 1]
@@ -157,6 +169,8 @@ class Detector(torch.nn.Module):
         """
         logits, raw_depth = self(x)
         pred = logits.argmax(dim=1)
+
+        # Optional additional post-processing for depth only if needed
         depth = raw_depth.squeeze(1)
 
         return pred, depth
@@ -231,6 +245,9 @@ def calculate_model_size_mb(model: torch.nn.Module) -> float:
 def debug_model(batch_size: int = 1):
     """
     Test your model implementation
+
+    Feel free to add additional checks to this function -
+    this function is NOT used for grading
     """
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     sample_batch = torch.rand(batch_size, 3, 64, 64).to(device)
@@ -240,6 +257,7 @@ def debug_model(batch_size: int = 1):
     model = load_model("classifier", in_channels=3, num_classes=6).to(device)
     output = model(sample_batch)
 
+    # should output logits (b, num_classes)
     print(f"Output shape: {output.shape}")
 
 
