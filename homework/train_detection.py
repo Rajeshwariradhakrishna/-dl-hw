@@ -50,7 +50,8 @@ data_transforms = transforms.Compose([
     transforms.RandomRotation(10),
     transforms.ColorJitter(brightness=0.2, contrast=0.2),
     transforms.GaussianBlur(3),
-    transforms.ToTensor(),
+    # Skip ToTensor() since the data is already a tensor
+    transforms.Lambda(lambda x: x if isinstance(x, torch.Tensor) else transforms.ToTensor()(x)),
     transforms.Normalize(mean=[0.2788, 0.2657, 0.2629], std=[0.2064, 0.1944, 0.2252])  # Normalize
 ])
 
