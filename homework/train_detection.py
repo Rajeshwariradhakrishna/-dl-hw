@@ -50,6 +50,20 @@ def lovasz_softmax_loss(preds, targets):
     jaccard_loss = 1 - intersection / (union + 1e-6)
     return jaccard_loss.mean()
 
+# 🔹 **Dice Loss for better segmentation**
+def dice_loss(preds, targets):
+    preds = torch.sigmoid(preds)
+    targets = F.one_hot(targets, num_classes=preds.shape[1]).permute(0, 3, 1, 2).float()
+    intersection = (preds * targets).sum(dim=(1, 2, 3))
+    union = (preds + targets).sum(dim=(1, 2, 3))
+    dice = (2 * intersection + 1e-6) / (union + 1e-6)
+    return 1 - dice.mean()
+
+# 🔹 **Scale-Invariant Depth Loss**
+def scale_invariant_depth_loss(pred, target):
+    log_diff = torch.log(pred + 1e-6) - torch.log(target + 1e-6)
+    return torch.sqrt((log_diff ** 2).mean() - 0.5 * (log_diff.mean() ** 2))
+
 # 🔹 **Data Augmentation**
 data_transforms = transforms.Compose([
     transforms.Resize((256, 256)),  # Resize to higher resolution
@@ -61,13 +75,6 @@ data_transforms = transforms.Compose([
     transforms.Lambda(lambda x: x if isinstance(x, torch.Tensor) else transforms.ToTensor()(x)),
     transforms.Normalize(mean=[0.2788, 0.2657, 0.2629], std=[0.2064, 0.1944, 0.2252])  # Normalize
 ])
-
-# 🔹 **Smooth L1 Loss for Depth Error**
-def depth_loss(pred, target):
-    # Resize pred to match target's spatial dimensions
-    if pred.shape[-2:] != target.shape[-2:]:
-        pred = F.interpolate(pred, size=target.shape[-2:], mode='bilinear', align_corners=False)
-    return F.smooth_l1_loss(pred, target, beta=0.02)  # Use smaller beta for better depth regression
 
 def apply_transforms(batch, transform):
     """Apply transformations to the batch of images."""
@@ -112,8 +119,8 @@ def train(model_name="detector", num_epoch=40, lr=5e-4):
                 depth_pred = F.interpolate(depth_pred, size=depth_labels.shape[-2:], mode='bilinear', align_corners=False)
 
             # Compute loss
-            loss_segmentation = lovasz_softmax_loss(segmentation_pred, segmentation_labels) + TverskyLoss()(segmentation_pred, segmentation_labels)
-            loss_depth = depth_loss(depth_pred, depth_labels)
+            loss_segmentation = lovasz_softmax_loss(segmentation_pred, segmentation_labels) + TverskyLoss()(segmentation_pred, segmentation_labels) + dice_loss(segmentation_pred, segmentation_labels)
+            loss_depth = scale_invariant_depth_loss(depth_pred, depth_labels)
             loss = loss_segmentation + loss_depth
 
             loss.backward()
@@ -146,8 +153,8 @@ def train(model_name="detector", num_epoch=40, lr=5e-4):
                     depth_pred = F.interpolate(depth_pred, size=depth_labels.shape[-2:], mode='bilinear', align_corners=False)
 
                 # Compute validation loss
-                loss_segmentation = lovasz_softmax_loss(segmentation_pred, segmentation_labels) + TverskyLoss()(segmentation_pred, segmentation_labels)
-                loss_depth = depth_loss(depth_pred, depth_labels)
+                loss_segmentation = lovasz_softmax_loss(segmentation_pred, segmentation_labels) + TverskyLoss()(segmentation_pred, segmentation_labels) + dice_loss(segmentation_pred, segmentation_labels)
+                loss_depth = scale_invariant_depth_loss(depth_pred, depth_labels)
                 loss = loss_segmentation + loss_depth
 
                 total_val_loss += loss.item()
