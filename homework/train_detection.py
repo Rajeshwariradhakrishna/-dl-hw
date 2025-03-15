@@ -93,6 +93,10 @@ def train(model_name="detector", num_epoch=40, lr=5e-4):
             optimizer.zero_grad()
             segmentation_pred, depth_pred = model(images)
 
+            # Resize segmentation_pred to match segmentation_labels
+            if segmentation_pred.shape[-2:] != segmentation_labels.shape[-2:]:
+                segmentation_pred = F.interpolate(segmentation_pred, size=segmentation_labels.shape[-2:], mode='bilinear', align_corners=False)
+
             # Compute loss
             loss_segmentation = lovasz_softmax_loss(segmentation_pred, segmentation_labels) + TverskyLoss()(segmentation_pred, segmentation_labels)
             loss_depth = depth_loss(depth_pred, depth_labels)
@@ -118,6 +122,10 @@ def train(model_name="detector", num_epoch=40, lr=5e-4):
                 depth_labels = batch['depth'].to(device).unsqueeze(1)
 
                 segmentation_pred, depth_pred = model(images)
+
+                # Resize segmentation_pred to match segmentation_labels
+                if segmentation_pred.shape[-2:] != segmentation_labels.shape[-2:]:
+                    segmentation_pred = F.interpolate(segmentation_pred, size=segmentation_labels.shape[-2:], mode='bilinear', align_corners=False)
 
                 # Compute validation loss
                 loss_segmentation = lovasz_softmax_loss(segmentation_pred, segmentation_labels) + TverskyLoss()(segmentation_pred, segmentation_labels)
