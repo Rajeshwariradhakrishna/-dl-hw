@@ -28,6 +28,7 @@ class TverskyLoss(nn.Module):
 
     def forward(self, preds, targets):
         preds = torch.sigmoid(preds)  # Apply sigmoid to get probabilities
+        targets = F.one_hot(targets, num_classes=preds.shape[1]).permute(0, 3, 1, 2).float()  # Convert to one-hot
         true_pos = (preds * targets).sum(dim=(1, 2, 3))
         false_neg = ((1 - preds) * targets).sum(dim=(1, 2, 3))
         false_pos = (preds * (1 - targets)).sum(dim=(1, 2, 3))
@@ -35,16 +36,15 @@ class TverskyLoss(nn.Module):
         return 1 - tversky.mean()
 
 # 🔹 **Lovász Softmax Loss to directly optimize IoU**
-def lovasz_softmax_loss(preds, targets, num_classes=3):
+def lovasz_softmax_loss(preds, targets):
     """
     Compute the Lovász-Softmax loss.
     Args:
         preds: (B, C, H, W) tensor of predicted logits.
         targets: (B, H, W) tensor of ground truth class indices.
-        num_classes: Number of classes.
     """
     preds = torch.softmax(preds, dim=1)  # Apply softmax to get probabilities
-    targets = F.one_hot(targets, num_classes=num_classes).permute(0, 3, 1, 2).float()  # Convert to one-hot
+    targets = F.one_hot(targets, num_classes=preds.shape[1]).permute(0, 3, 1, 2).float()  # Convert to one-hot
     intersection = (preds * targets).sum(dim=(1, 2, 3))
     union = (preds + targets).sum(dim=(1, 2, 3)) - intersection
     jaccard_loss = 1 - intersection / (union + 1e-6)
