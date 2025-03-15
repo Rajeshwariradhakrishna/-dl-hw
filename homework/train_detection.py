@@ -58,12 +58,17 @@ data_transforms = transforms.Compose([
 def depth_loss(pred, target):
     return F.smooth_l1_loss(pred, target, beta=0.02)  # Use smaller beta for better depth regression
 
+def apply_transforms(batch, transform):
+    """Apply transformations to the batch of images."""
+    batch['image'] = torch.stack([transform(img) for img in batch['image']])
+    return batch
+
 def train(model_name="detector", num_epoch=40, lr=5e-4):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # Load dataset with data augmentation
-    train_loader = load_data("drive_data/train", transform=data_transforms)
-    val_loader = load_data("drive_data/val", transform=data_transforms)
+    # Load dataset
+    train_loader = load_data("drive_data/train")
+    val_loader = load_data("drive_data/val")
 
     # Initialize model
     model = Detector().to(device)
@@ -78,6 +83,8 @@ def train(model_name="detector", num_epoch=40, lr=5e-4):
         # Training loop
         model.train()
         for batch in train_loader:
+            # Apply data augmentation to the batch
+            batch = apply_transforms(batch, data_transforms)
             images = batch['image'].to(device)
             segmentation_labels = batch['track'].to(device).long()
             depth_labels = batch['depth'].to(device).unsqueeze(1)
@@ -103,6 +110,8 @@ def train(model_name="detector", num_epoch=40, lr=5e-4):
         total_val_loss = 0
         with torch.no_grad():
             for batch in val_loader:
+                # Apply transformations to the validation batch
+                batch = apply_transforms(batch, data_transforms)
                 images = batch['image'].to(device)
                 segmentation_labels = batch['track'].to(device).long()
                 depth_labels = batch['depth'].to(device).unsqueeze(1)
