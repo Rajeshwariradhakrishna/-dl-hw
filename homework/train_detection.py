@@ -64,6 +64,9 @@ data_transforms = transforms.Compose([
 
 # 🔹 **Smooth L1 Loss for Depth Error**
 def depth_loss(pred, target):
+    # Resize pred to match target's spatial dimensions
+    if pred.shape[-2:] != target.shape[-2:]:
+        pred = F.interpolate(pred, size=target.shape[-2:], mode='bilinear', align_corners=False)
     return F.smooth_l1_loss(pred, target, beta=0.02)  # Use smaller beta for better depth regression
 
 def apply_transforms(batch, transform):
@@ -104,6 +107,10 @@ def train(model_name="detector", num_epoch=40, lr=5e-4):
             if segmentation_pred.shape[-2:] != segmentation_labels.shape[-2:]:
                 segmentation_pred = F.interpolate(segmentation_pred, size=segmentation_labels.shape[-2:], mode='bilinear', align_corners=False)
 
+            # Resize depth_pred to match depth_labels
+            if depth_pred.shape[-2:] != depth_labels.shape[-2:]:
+                depth_pred = F.interpolate(depth_pred, size=depth_labels.shape[-2:], mode='bilinear', align_corners=False)
+
             # Compute loss
             loss_segmentation = lovasz_softmax_loss(segmentation_pred, segmentation_labels) + TverskyLoss()(segmentation_pred, segmentation_labels)
             loss_depth = depth_loss(depth_pred, depth_labels)
@@ -133,6 +140,10 @@ def train(model_name="detector", num_epoch=40, lr=5e-4):
                 # Resize segmentation_pred to match segmentation_labels
                 if segmentation_pred.shape[-2:] != segmentation_labels.shape[-2:]:
                     segmentation_pred = F.interpolate(segmentation_pred, size=segmentation_labels.shape[-2:], mode='bilinear', align_corners=False)
+
+                # Resize depth_pred to match depth_labels
+                if depth_pred.shape[-2:] != depth_labels.shape[-2:]:
+                    depth_pred = F.interpolate(depth_pred, size=depth_labels.shape[-2:], mode='bilinear', align_corners=False)
 
                 # Compute validation loss
                 loss_segmentation = lovasz_softmax_loss(segmentation_pred, segmentation_labels) + TverskyLoss()(segmentation_pred, segmentation_labels)
