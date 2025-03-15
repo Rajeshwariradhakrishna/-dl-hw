@@ -47,7 +47,7 @@ def lovasz_softmax_loss(preds, targets):
     targets = F.one_hot(targets, num_classes=preds.shape[1]).permute(0, 3, 1, 2).float()  # Convert to one-hot
     intersection = (preds * targets).sum(dim=(1, 2, 3))
     union = (preds + targets).sum(dim=(1, 2, 3)) - intersection
-    jaccard_loss = 1 - intersection / (union + 1e-6)
+    jaccard_loss = 1 - (intersection + 1e-6) / (union + 1e-6)  # Add epsilon to avoid division by zero
     return jaccard_loss.mean()
 
 # 🔹 **Dice Loss for better segmentation**
@@ -56,12 +56,12 @@ def dice_loss(preds, targets):
     targets = F.one_hot(targets, num_classes=preds.shape[1]).permute(0, 3, 1, 2).float()
     intersection = (preds * targets).sum(dim=(1, 2, 3))
     union = (preds + targets).sum(dim=(1, 2, 3))
-    dice = (2 * intersection + 1e-6) / (union + 1e-6)
+    dice = (2 * intersection + 1e-6) / (union + 1e-6)  # Add epsilon to avoid division by zero
     return 1 - dice.mean()
 
 # 🔹 **Scale-Invariant Depth Loss**
 def scale_invariant_depth_loss(pred, target):
-    log_diff = torch.log(pred + 1e-6) - torch.log(target + 1e-6)
+    log_diff = torch.log(pred.clamp(min=1e-6)) - torch.log(target.clamp(min=1e-6))  # Clip to avoid log(0)
     return torch.sqrt((log_diff ** 2).mean() - 0.5 * (log_diff.mean() ** 2))
 
 # 🔹 **Data Augmentation**
@@ -92,8 +92,9 @@ def train(model_name="detector", num_epoch=40, lr=5e-4):
     model = Detector().to(device)
     model.train()
 
-    # Define optimizer
+    # Define optimizer with gradient clipping
     optimizer = optim.Adam(model.parameters(), lr=lr)
+    max_grad_norm = 1.0  # Gradient clipping threshold
 
     for epoch in range(num_epoch):
         total_train_loss = 0
@@ -110,6 +111,10 @@ def train(model_name="detector", num_epoch=40, lr=5e-4):
             optimizer.zero_grad()
             segmentation_pred, depth_pred = model(images)
 
+            # Check for NaNs in predictions
+            if torch.isnan(segmentation_pred).any() or torch.isnan(depth_pred).any():
+                raise ValueError("Model output contains NaN values.")
+
             # Resize segmentation_pred to match segmentation_labels
             if segmentation_pred.shape[-2:] != segmentation_labels.shape[-2:]:
                 segmentation_pred = F.interpolate(segmentation_pred, size=segmentation_labels.shape[-2:], mode='bilinear', align_corners=False)
@@ -123,7 +128,15 @@ def train(model_name="detector", num_epoch=40, lr=5e-4):
             loss_depth = scale_invariant_depth_loss(depth_pred, depth_labels)
             loss = loss_segmentation + loss_depth
 
+            # Check for NaNs in loss
+            if torch.isnan(loss):
+                raise ValueError("Loss contains NaN values.")
+
             loss.backward()
+
+            # Gradient clipping
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
+
             optimizer.step()
 
             total_train_loss += loss.item()
