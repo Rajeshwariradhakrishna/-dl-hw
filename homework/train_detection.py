@@ -35,9 +35,16 @@ class TverskyLoss(nn.Module):
         return 1 - tversky.mean()
 
 # 🔹 **Lovász Softmax Loss to directly optimize IoU**
-def lovasz_softmax_loss(preds, targets):
+def lovasz_softmax_loss(preds, targets, num_classes=3):
+    """
+    Compute the Lovász-Softmax loss.
+    Args:
+        preds: (B, C, H, W) tensor of predicted logits.
+        targets: (B, H, W) tensor of ground truth class indices.
+        num_classes: Number of classes.
+    """
     preds = torch.softmax(preds, dim=1)  # Apply softmax to get probabilities
-    targets = targets.float()
+    targets = F.one_hot(targets, num_classes=num_classes).permute(0, 3, 1, 2).float()  # Convert to one-hot
     intersection = (preds * targets).sum(dim=(1, 2, 3))
     union = (preds + targets).sum(dim=(1, 2, 3)) - intersection
     jaccard_loss = 1 - intersection / (union + 1e-6)
