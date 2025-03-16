@@ -65,6 +65,7 @@ data_transforms = transforms.Compose([
     transforms.RandomRotation(10),
     transforms.ColorJitter(brightness=0.2, contrast=0.2),
     transforms.GaussianBlur(3),
+    transforms.RandomCrop((224, 224)),  # Added random cropping
     transforms.Lambda(lambda x: x if isinstance(x, torch.Tensor) else transforms.ToTensor()(x)),
     transforms.Normalize(mean=[0.2788, 0.2657, 0.2629], std=[0.2064, 0.1944, 0.2252])
 ])
@@ -87,6 +88,7 @@ def train(model_name="detector", num_epoch=40, lr=5e-4):
 
     # Define optimizer with gradient clipping
     optimizer = optim.Adam(model.parameters(), lr=lr)
+    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.1)  # Learning rate scheduler
     max_grad_norm = 1.0  
 
     for epoch in range(num_epoch):
@@ -104,15 +106,23 @@ def train(model_name="detector", num_epoch=40, lr=5e-4):
             if torch.isnan(segmentation_pred).any() or torch.isnan(depth_pred).any():
                 raise ValueError("Model output contains NaN values.")
 
+            # Resize predictions if necessary
             if segmentation_pred.shape[-2:] != segmentation_labels.shape[-2:]:
                 segmentation_pred = F.interpolate(segmentation_pred, size=segmentation_labels.shape[-2:], mode='bilinear', align_corners=False)
             if depth_pred.shape[-2:] != depth_labels.shape[-2:]:
                 depth_pred = F.interpolate(depth_pred, size=depth_labels.shape[-2:], mode='bilinear', align_corners=False)
 
-            loss_segmentation = (lovasz_softmax_loss(segmentation_pred, segmentation_labels) + 
-                                 TverskyLoss()(segmentation_pred, segmentation_labels) + 
-                                 dice_loss(segmentation_pred, segmentation_labels))
+            # Weighted loss for segmentation
+            loss_segmentation = (
+                0.5 * lovasz_softmax_loss(segmentation_pred, segmentation_labels) +
+                0.3 * TverskyLoss()(segmentation_pred, segmentation_labels) +
+                0.2 * dice_loss(segmentation_pred, segmentation_labels)
+            )
+
+            # Depth loss
             loss_depth = scale_invariant_depth_loss(depth_pred, depth_labels)
+
+            # Total loss
             loss = loss_segmentation + loss_depth
 
             if torch.isnan(loss):
@@ -122,6 +132,8 @@ def train(model_name="detector", num_epoch=40, lr=5e-4):
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
             optimizer.step()
             total_train_loss += loss.item()
+
+        scheduler.step()  # Update learning rate
 
         avg_train_loss = total_train_loss / len(train_loader)
         print(f"Epoch {epoch+1}: Train Loss = {avg_train_loss:.4f}")
@@ -143,9 +155,11 @@ def train(model_name="detector", num_epoch=40, lr=5e-4):
                 if depth_pred.shape[-2:] != depth_labels.shape[-2:]:
                     depth_pred = F.interpolate(depth_pred, size=depth_labels.shape[-2:], mode='bilinear', align_corners=False)
 
-                loss_segmentation = (lovasz_softmax_loss(segmentation_pred, segmentation_labels) + 
-                                     TverskyLoss()(segmentation_pred, segmentation_labels) + 
-                                     dice_loss(segmentation_pred, segmentation_labels))
+                loss_segmentation = (
+                    0.5 * lovasz_softmax_loss(segmentation_pred, segmentation_labels) +
+                    0.3 * TverskyLoss()(segmentation_pred, segmentation_labels) +
+                    0.2 * dice_loss(segmentation_pred, segmentation_labels)
+                )
                 loss_depth = scale_invariant_depth_loss(depth_pred, depth_labels)
                 loss = loss_segmentation + loss_depth
 
