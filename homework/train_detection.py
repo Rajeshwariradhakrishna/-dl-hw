@@ -4,8 +4,7 @@ import torch.optim as optim
 import torch.nn.functional as F
 import torchvision.transforms as transforms
 from homework.datasets.drive_dataset import load_data
-from models import Detector, HOMEWORK_DIR  
-
+from models import Detector, HOMEWORK_DIR
 import os
 
 log_dir = str(HOMEWORK_DIR)
@@ -48,7 +47,8 @@ data_transforms = transforms.Compose([
     transforms.RandomRotation(10),
     transforms.ColorJitter(brightness=0.2, contrast=0.2),
     transforms.GaussianBlur(3),
-    transforms.ToTensor()
+    transforms.ToTensor(),
+    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
 ])
 
 # 🔹 **Smooth L1 Loss for Depth Error**
@@ -59,8 +59,9 @@ def depth_loss(pred, target):
 def train(model_name="detector", num_epoch=40, lr=5e-4, batch_size=8):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    train_loader = load_data("drive_data/train", transform=data_transforms, batch_size=batch_size)
-    val_loader = load_data("drive_data/val", batch_size=batch_size)
+    # Pass transforms into data loading
+    train_loader = load_data("drive_data/train", batch_size=16, transform=data_transforms)
+    val_loader = load_data("drive_data/val", batch_size=16, transform=data_transforms)
 
     model = Detector().to(device)
     model.train()
