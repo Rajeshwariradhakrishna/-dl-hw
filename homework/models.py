@@ -109,10 +109,6 @@ class Detector(torch.nn.Module):
         self.conv4 = nn.Conv2d(128, 256, kernel_size=3, stride=2, padding=1)
         self.conv5 = nn.Conv2d(256, 512, kernel_size=3, stride=2, padding=1)
 
-         # Additional layers to improve the depth of the model
-        self.conv6 = nn.Conv2d(512, 512, kernel_size=3, stride=2, padding=1)
-        self.conv7 = nn.Conv2d(512, 512, kernel_size=3, stride=2, padding=1)
-
         # Decoder (Up-sampling)
         self.upconv1 = nn.ConvTranspose2d(512, 256, kernel_size=3, stride=2, padding=1, output_padding=1)
         self.upconv2 = nn.ConvTranspose2d(256, 128, kernel_size=3, stride=2, padding=1, output_padding=1)
@@ -150,22 +146,24 @@ class Detector(torch.nn.Module):
         x3 = torch.relu(self.conv3(x2))
         x4 = torch.relu(self.conv4(x3))
         x5 = torch.relu(self.conv5(x4))
-        x6 = torch.relu(self.conv6(x5))
-        x7 = torch.relu(self.conv7(x6))
 
         # Upsample the feature map
-        x = torch.relu(self.upconv1(x7))
+        x = torch.relu(self.upconv1(x5))
         x = torch.relu(self.upconv2(x))
         x = torch.relu(self.upconv3(x))
         x = torch.relu(self.upconv4(x))
         x = torch.relu(self.upconv5(x))
 
 
-        logits = self.segmentation_conv(x)
+        # Resize to match target dimensions using bilinear interpolation
+        segmentation_logits = self.segmentation_conv(x)
+        segmentation_logits = F.interpolate(segmentation_logits, size=(96, 128), mode='bilinear', align_corners=False)
+
         raw_depth = self.depth_conv(x)
+        raw_depth = F.interpolate(raw_depth, size=(96, 128), mode='bilinear', align_corners=False)
 
-        return logits, raw_depth
-
+        return segmentation_logits, raw_depth
+    
     def predict(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Used for inference, takes an image and returns class labels and normalized depth.
