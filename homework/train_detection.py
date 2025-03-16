@@ -33,10 +33,15 @@ class TverskyLoss(nn.Module):
 
 # 🔹 **Lovász Softmax Loss to directly optimize IoU**
 def lovasz_softmax_loss(preds, targets):
+    # Make sure targets are one-hot encoded
+    batch_size, num_classes, height, width = preds.shape
+    targets_one_hot = torch.zeros(batch_size, num_classes, height, width).to(targets.device)
+    targets_one_hot.scatter_(1, targets.unsqueeze(1), 1)  # one-hot encoding
+
+    # Now compute the loss
     preds = torch.softmax(preds, dim=1)
-    targets = targets.float()
-    intersection = (preds * targets).sum(dim=(1, 2, 3))
-    union = (preds + targets).sum(dim=(1, 2, 3)) - intersection
+    intersection = (preds * targets_one_hot).sum(dim=(1, 2, 3))
+    union = (preds + targets_one_hot).sum(dim=(1, 2, 3)) - intersection
     jaccard_loss = 1 - intersection / (union + 1e-6)
     return jaccard_loss.mean()
 
