@@ -109,6 +109,10 @@ class Detector(torch.nn.Module):
         self.conv4 = nn.Conv2d(128, 256, kernel_size=3, stride=2, padding=1)
         self.conv5 = nn.Conv2d(256, 512, kernel_size=3, stride=2, padding=1)
 
+         # Additional layers to improve the depth of the model
+        self.conv6 = nn.Conv2d(512, 512, kernel_size=3, stride=2, padding=1)
+        self.conv7 = nn.Conv2d(512, 512, kernel_size=3, stride=2, padding=1)
+
         # Decoder (Up-sampling)
         self.upconv1 = nn.ConvTranspose2d(512, 256, kernel_size=3, stride=2, padding=1, output_padding=1)
         self.upconv2 = nn.ConvTranspose2d(256, 128, kernel_size=3, stride=2, padding=1, output_padding=1)
@@ -139,15 +143,18 @@ class Detector(torch.nn.Module):
         z = (x - self.input_mean[None, :, None, None]) / self.input_std[None, :, None, None]
 
         # TODO: replace with actual forward pass
-         # Encoder: down-sampling the spatial dimensions
+        # Encoder: down-sampling the spatial dimensions
+        # Forward pass through convolutions
         x1 = torch.relu(self.conv1(z))
         x2 = torch.relu(self.conv2(x1))
         x3 = torch.relu(self.conv3(x2))
         x4 = torch.relu(self.conv4(x3))
-        x5 = torch.relu(self.conv5(x4)) 
+        x5 = torch.relu(self.conv5(x4))
+        x6 = torch.relu(self.conv6(x5))
+        x7 = torch.relu(self.conv7(x6))
 
-        # Decoder: up-sampling to recover the original spatial dimensions
-        x = torch.relu(self.upconv1(x4))
+        # Upsample the feature map
+        x = torch.relu(self.upconv1(x7))
         x = torch.relu(self.upconv2(x))
         x = torch.relu(self.upconv3(x))
         x = torch.relu(self.upconv4(x))
