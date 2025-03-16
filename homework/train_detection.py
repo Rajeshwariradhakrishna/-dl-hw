@@ -75,6 +75,15 @@ def apply_transforms(batch, transform):
     batch['image'] = torch.stack([transform(img) for img in batch['image']])
     return batch
 
+# 🔹 **IoU Calculation**
+def calculate_iou(preds, targets):
+    preds = torch.argmax(preds, dim=1)  # Convert logits to class indices
+    targets = targets.squeeze(1)  # Remove channel dimension if present
+    intersection = (preds & targets).float().sum((1, 2))  # Intersection
+    union = (preds | targets).float().sum((1, 2))  # Union
+    iou = (intersection + 1e-6) / (union + 1e-6)  # Avoid division by zero
+    return iou.mean()
+
 def train(model_name="detector", num_epoch=40, lr=5e-4):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -93,12 +102,13 @@ def train(model_name="detector", num_epoch=40, lr=5e-4):
 
     for epoch in range(num_epoch):
         total_train_loss = 0
+        total_train_iou = 0
         model.train()
         for batch in train_loader:
             batch = apply_transforms(batch, data_transforms)
             images = batch['image'].to(device)
             segmentation_labels = batch['track'].to(device).long()
-            depth_labels = batch['depth'].to(device).unsqueeze(1)  # Ensure depth_labels is (B, 1, H, W)
+            depth_labels = batch['depth'].to(device).unsqueeze(1)
 
             optimizer.zero_grad()
             segmentation_pred, depth_pred = model(images)
@@ -111,10 +121,6 @@ def train(model_name="detector", num_epoch=40, lr=5e-4):
                 segmentation_pred = F.interpolate(segmentation_pred, size=segmentation_labels.shape[-2:], mode='bilinear', align_corners=False)
             if depth_pred.shape[-2:] != depth_labels.shape[-2:]:
                 depth_pred = F.interpolate(depth_pred, size=depth_labels.shape[-2:], mode='bilinear', align_corners=False)
-
-            # Ensure depth_pred is (B, 1, H, W) and then squeeze to (B, H, W) for loss calculation
-            depth_pred = depth_pred.squeeze(1)  # Remove channel dimension for depth loss
-            depth_labels = depth_labels.squeeze(1)  # Remove channel dimension for depth loss
 
             # Weighted loss for segmentation
             loss_segmentation = (
@@ -135,16 +141,22 @@ def train(model_name="detector", num_epoch=40, lr=5e-4):
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
             optimizer.step()
+
+            # Calculate IoU
+            iou = calculate_iou(segmentation_pred, segmentation_labels)
             total_train_loss += loss.item()
+            total_train_iou += iou.item()
 
         scheduler.step()  # Update learning rate
 
         avg_train_loss = total_train_loss / len(train_loader)
-        print(f"Epoch {epoch+1}: Train Loss = {avg_train_loss:.4f}")
+        avg_train_iou = total_train_iou / len(train_loader)
+        print(f"Epoch {epoch+1}: Train Loss = {avg_train_loss:.4f}, Train IoU = {avg_train_iou:.4f}")
 
         # Validation loop
         model.eval()
         total_val_loss = 0
+        total_val_iou = 0
         with torch.no_grad():
             for batch in val_loader:
                 batch = apply_transforms(batch, data_transforms)
@@ -159,10 +171,7 @@ def train(model_name="detector", num_epoch=40, lr=5e-4):
                 if depth_pred.shape[-2:] != depth_labels.shape[-2:]:
                     depth_pred = F.interpolate(depth_pred, size=depth_labels.shape[-2:], mode='bilinear', align_corners=False)
 
-                # Ensure depth_pred is (B, 1, H, W) and then squeeze to (B, H, W) for loss calculation
-                depth_pred = depth_pred.squeeze(1)  # Remove channel dimension for depth loss
-                depth_labels = depth_labels.squeeze(1)  # Remove channel dimension for depth loss
-
+                # Weighted loss for segmentation
                 loss_segmentation = (
                     0.5 * lovasz_softmax_loss(segmentation_pred, segmentation_labels) +
                     0.3 * TverskyLoss()(segmentation_pred, segmentation_labels) +
@@ -171,10 +180,14 @@ def train(model_name="detector", num_epoch=40, lr=5e-4):
                 loss_depth = scale_invariant_depth_loss(depth_pred, depth_labels)
                 loss = loss_segmentation + loss_depth
 
+                # Calculate IoU
+                iou = calculate_iou(segmentation_pred, segmentation_labels)
                 total_val_loss += loss.item()
+                total_val_iou += iou.item()
 
         avg_val_loss = total_val_loss / len(val_loader)
-        print(f"Epoch {epoch+1}: Validation Loss = {avg_val_loss:.4f}")
+        avg_val_iou = total_val_iou / len(val_loader)
+        print(f"Epoch {epoch+1}: Validation Loss = {avg_val_loss:.4f}, Validation IoU = {avg_val_iou:.4f}")
 
     save_model(model, model_name, log_dir)
 
