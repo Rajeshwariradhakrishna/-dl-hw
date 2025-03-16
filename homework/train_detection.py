@@ -98,7 +98,7 @@ def train(model_name="detector", num_epoch=40, lr=5e-4):
             batch = apply_transforms(batch, data_transforms)
             images = batch['image'].to(device)
             segmentation_labels = batch['track'].to(device).long()
-            depth_labels = batch['depth'].to(device).unsqueeze(1)
+            depth_labels = batch['depth'].to(device).unsqueeze(1)  # Ensure depth_labels is (B, 1, H, W)
 
             optimizer.zero_grad()
             segmentation_pred, depth_pred = model(images)
@@ -111,6 +111,10 @@ def train(model_name="detector", num_epoch=40, lr=5e-4):
                 segmentation_pred = F.interpolate(segmentation_pred, size=segmentation_labels.shape[-2:], mode='bilinear', align_corners=False)
             if depth_pred.shape[-2:] != depth_labels.shape[-2:]:
                 depth_pred = F.interpolate(depth_pred, size=depth_labels.shape[-2:], mode='bilinear', align_corners=False)
+
+            # Ensure depth_pred is (B, 1, H, W) and then squeeze to (B, H, W) for loss calculation
+            depth_pred = depth_pred.squeeze(1)  # Remove channel dimension for depth loss
+            depth_labels = depth_labels.squeeze(1)  # Remove channel dimension for depth loss
 
             # Weighted loss for segmentation
             loss_segmentation = (
@@ -154,6 +158,10 @@ def train(model_name="detector", num_epoch=40, lr=5e-4):
                     segmentation_pred = F.interpolate(segmentation_pred, size=segmentation_labels.shape[-2:], mode='bilinear', align_corners=False)
                 if depth_pred.shape[-2:] != depth_labels.shape[-2:]:
                     depth_pred = F.interpolate(depth_pred, size=depth_labels.shape[-2:], mode='bilinear', align_corners=False)
+
+                # Ensure depth_pred is (B, 1, H, W) and then squeeze to (B, H, W) for loss calculation
+                depth_pred = depth_pred.squeeze(1)  # Remove channel dimension for depth loss
+                depth_labels = depth_labels.squeeze(1)  # Remove channel dimension for depth loss
 
                 loss_segmentation = (
                     0.5 * lovasz_softmax_loss(segmentation_pred, segmentation_labels) +
