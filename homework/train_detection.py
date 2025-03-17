@@ -7,7 +7,6 @@ from models import Detector, HOMEWORK_DIR
 import numpy as np
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 
-
 # Define log_dir where you want to save the model
 log_dir = str(HOMEWORK_DIR)
 os.makedirs(log_dir, exist_ok=True)  # Create the directory if it doesn't exist
@@ -27,14 +26,12 @@ class IoULoss(nn.Module):
 
     def forward(self, preds, targets):
         preds = torch.sigmoid(preds)  # Convert logits to probabilities
-
-        # Threshold predictions to binary values
-        preds = preds > 0.5
-        intersection = (preds * targets).sum(dim=(2, 3))  # Sum over H and W dimensions
+        preds = preds > 0.5  # Threshold to binary values
+        intersection = (preds * targets).sum(dim=(2, 3))  
         union = preds.sum(dim=(2, 3)) + targets.sum(dim=(2, 3)) - intersection
         
         iou = (intersection + self.smooth) / (union + self.smooth)
-        return 1 - iou.mean()  # We want to minimize this loss
+        return 1 - iou.mean()  
 
 # Custom IoU Metric for Segmentation
 class IoUMetric(nn.Module):
@@ -43,8 +40,8 @@ class IoUMetric(nn.Module):
         self.smooth = smooth
 
     def forward(self, preds, targets):
-        preds = torch.sigmoid(preds)  # Convert logits to probabilities
-        preds = preds > 0.5  # Threshold to binary
+        preds = torch.sigmoid(preds)  
+        preds = preds > 0.5  
         intersection = (preds * targets).sum(dim=(2, 3))
         union = preds.sum(dim=(2, 3)) + targets.sum(dim=(2, 3)) - intersection
 
@@ -64,16 +61,16 @@ def train(model_name="detector", num_epoch=10, lr=1e-3, patience=5):
     model.train()
 
     # Define loss functions
-    criterion_segmentation = IoULoss()  # Updated to IoU loss
+    criterion_segmentation = IoULoss()  
     criterion_depth = nn.L1Loss()
 
     # Define optimizer
     optimizer = optim.Adam(model.parameters(), lr=lr)
 
-    # Learning rate scheduler (Reduce LR on plateau)
+    # Learning rate scheduler
     scheduler = ReduceLROnPlateau(optimizer, 'min', patience=patience, factor=0.5, verbose=True)
 
-    # IoU Metric for tracking during training and validation
+    # IoU Metric
     iou_metric = IoUMetric()
 
     # Training loop with early stopping
@@ -84,17 +81,15 @@ def train(model_name="detector", num_epoch=10, lr=1e-3, patience=5):
         total_train_loss = 0
         total_train_iou = 0
 
-        # Training loop
         model.train()
         for batch in train_loader:
             images = batch['image'].to(device)
             segmentation_labels = batch['track'].to(device).long()
-            depth_labels = batch['depth'].to(device).unsqueeze(1)  # Fix shape
+            depth_labels = batch['depth'].to(device).unsqueeze(1)  
 
             optimizer.zero_grad()
             segmentation_pred, depth_pred = model(images)
 
-            # Compute loss
             loss_segmentation = criterion_segmentation(segmentation_pred, segmentation_labels)
             loss_depth = criterion_depth(depth_pred, depth_labels)
             loss = loss_segmentation + loss_depth
@@ -121,7 +116,6 @@ def train(model_name="detector", num_epoch=10, lr=1e-3, patience=5):
 
                 segmentation_pred, depth_pred = model(images)
 
-                # Compute loss
                 loss_segmentation = criterion_segmentation(segmentation_pred, segmentation_labels)
                 loss_depth = criterion_depth(depth_pred, depth_labels)
                 loss = loss_segmentation + loss_depth
@@ -144,7 +138,6 @@ def train(model_name="detector", num_epoch=10, lr=1e-3, patience=5):
                 print(f"Early stopping at epoch {epoch + 1} with best validation loss: {best_val_loss:.4f}")
                 break
 
-        # Step the scheduler
         scheduler.step(avg_val_loss)
 
     print("Training finished!")
