@@ -30,6 +30,20 @@ class DiceLoss(nn.Module):
         dice = (2 * intersection + self.smooth) / (union + self.smooth)
         return 1 - dice.mean()
 
+# Combined Depth Loss (L1 + MSE)
+class CombinedDepthLoss(nn.Module):
+    def __init__(self, l1_weight=1.0, mse_weight=1.0):
+        super(CombinedDepthLoss, self).__init__()
+        self.l1_loss = nn.L1Loss()
+        self.mse_loss = nn.MSELoss()
+        self.l1_weight = l1_weight
+        self.mse_weight = mse_weight
+
+    def forward(self, preds, targets):
+        l1_loss = self.l1_loss(preds, targets)
+        mse_loss = self.mse_loss(preds, targets)
+        return self.l1_weight * l1_loss + self.mse_weight * mse_loss
+
 # IoU Metric for Segmentation
 class IoUMetric(nn.Module):
     def __init__(self, num_classes, smooth=1e-6):
@@ -58,7 +72,7 @@ def train(model_name="detector", num_epoch=50, lr=1e-3, patience=5):
 
     # Loss functions
     criterion_segmentation = DiceLoss()  # Use Dice Loss for segmentation
-    criterion_depth = nn.L1Loss() + nn.MSELoss()  # Combine L1 and MSE Loss for depth
+    criterion_depth = CombinedDepthLoss(l1_weight=1.0, mse_weight=1.0)  # Combine L1 and MSE Loss for depth
 
     # Optimizer
     optimizer = optim.Adam(model.parameters(), lr=lr)
