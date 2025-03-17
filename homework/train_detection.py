@@ -12,7 +12,7 @@ os.makedirs(log_dir, exist_ok=True)  # Create the directory if it doesn't exist
 
 def save_model(model, model_name, log_dir):
     """Save the model's state_dict to the specified directory."""
-    model_path = os.path.join(log_dir, f"{model_name}.pth")
+    model_path = os.path.join(log_dir, f"{model_name}.th")
     torch.save(model.state_dict(), model_path)
     print(f"Model saved to {model_path}")
 
