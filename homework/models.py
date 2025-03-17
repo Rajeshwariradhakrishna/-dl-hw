@@ -2,7 +2,6 @@ from pathlib import Path
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 
 HOMEWORK_DIR = Path(__file__).resolve().parent
 INPUT_MEAN = [0.2788, 0.2657, 0.2629]
@@ -108,14 +107,12 @@ class Detector(torch.nn.Module):
         self.conv2 = nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1)
         self.conv3 = nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1)
         self.conv4 = nn.Conv2d(128, 256, kernel_size=3, stride=2, padding=1)
-        self.conv5 = nn.Conv2d(256, 512, kernel_size=3, stride=2, padding=1)
 
         # Decoder (Up-sampling)
-        self.upconv1 = nn.ConvTranspose2d(512, 256, kernel_size=3, stride=2, padding=1, output_padding=1)
-        self.upconv2 = nn.ConvTranspose2d(256, 128, kernel_size=3, stride=2, padding=1, output_padding=1)
-        self.upconv3 = nn.ConvTranspose2d(128, 64, kernel_size=3, stride=2, padding=1, output_padding=1)
-        self.upconv4 = nn.ConvTranspose2d(64, 32, kernel_size=3, stride=2, padding=1, output_padding=1)
-        self.upconv5 = nn.ConvTranspose2d(32, 16, kernel_size=3, stride=2, padding=1, output_padding=1)
+        self.upconv1 = nn.ConvTranspose2d(256, 128, kernel_size=3, stride=2, padding=1, output_padding=1)
+        self.upconv2 = nn.ConvTranspose2d(128, 64, kernel_size=3, stride=2, padding=1, output_padding=1)
+        self.upconv3 = nn.ConvTranspose2d(64, 32, kernel_size=3, stride=2, padding=1, output_padding=1)
+        self.upconv4 = nn.ConvTranspose2d(32, 16, kernel_size=3, stride=2, padding=1, output_padding=1)
 
         # Segmentation Head
         self.segmentation_conv = nn.Conv2d(16, num_classes, kernel_size=1)
@@ -140,31 +137,23 @@ class Detector(torch.nn.Module):
         z = (x - self.input_mean[None, :, None, None]) / self.input_std[None, :, None, None]
 
         # TODO: replace with actual forward pass
-        # Encoder: down-sampling the spatial dimensions
-        # Forward pass through convolutions
+         # Encoder: down-sampling the spatial dimensions
         x1 = torch.relu(self.conv1(z))
         x2 = torch.relu(self.conv2(x1))
         x3 = torch.relu(self.conv3(x2))
         x4 = torch.relu(self.conv4(x3))
-        x5 = torch.relu(self.conv5(x4))
 
-        # Upsample the feature map
-        x = torch.relu(self.upconv1(x5))
+        # Decoder: up-sampling to recover the original spatial dimensions
+        x = torch.relu(self.upconv1(x4))
         x = torch.relu(self.upconv2(x))
         x = torch.relu(self.upconv3(x))
         x = torch.relu(self.upconv4(x))
-        x = torch.relu(self.upconv5(x))
 
-
-        # Resize to match target dimensions using bilinear interpolation
-        segmentation_logits = self.segmentation_conv(x)
-        segmentation_logits = F.interpolate(segmentation_logits, size=(96, 128), mode='bilinear', align_corners=False)
-
+        logits = self.segmentation_conv(x)
         raw_depth = self.depth_conv(x)
-        raw_depth = F.interpolate(raw_depth, size=(96, 128), mode='bilinear', align_corners=False)
 
-        return segmentation_logits, raw_depth
-    
+        return logits, raw_depth
+
     def predict(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Used for inference, takes an image and returns class labels and normalized depth.
