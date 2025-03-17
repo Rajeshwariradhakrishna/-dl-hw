@@ -3,12 +3,12 @@ import torch.optim as optim
 import torch.nn as nn
 import os
 from homework.datasets.drive_dataset import load_data
-from models import Detector, HOMEWORK_DIR  
+from models import Detector, HOMEWORK_DIR
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 
 # Define log directory
 log_dir = str(HOMEWORK_DIR)
-os.makedirs(log_dir, exist_ok=True)  # Create the directory if it doesn't exist
+os.makedirs(log_dir, exist_ok=True)
 
 def save_model(model, model_name, log_dir):
     """Save the model's state_dict to the specified directory."""
@@ -16,31 +16,7 @@ def save_model(model, model_name, log_dir):
     torch.save(model.state_dict(), model_path)
     print(f"Model saved to {model_path}")
 
-# IoU Loss for Segmentation
-class IoULoss(nn.Module):
-    def __init__(self, num_classes, smooth=1e-6):
-        super(IoULoss, self).__init__()
-        self.smooth = smooth
-        self.num_classes = num_classes
-
-    def forward(self, preds, targets):
-        # Convert logits to class indices (b, h, w)
-        preds = torch.argmax(preds, dim=1)  # Shape: (b, h, w)
-        
-        # Create one-hot encoded masks for predictions and targets
-        preds_one_hot = torch.nn.functional.one_hot(preds, num_classes=self.num_classes).permute(0, 3, 1, 2).float()
-        targets_one_hot = torch.nn.functional.one_hot(targets, num_classes=self.num_classes).permute(0, 3, 1, 2).float()
-        
-        # Calculate intersection and union
-        intersection = (preds_one_hot * targets_one_hot).sum(dim=(2, 3))
-        union = preds_one_hot.sum(dim=(2, 3)) + targets_one_hot.sum(dim=(2, 3)) - intersection
-        
-        # Calculate IoU
-        iou = (intersection + self.smooth) / (union + self.smooth)
-        
-        # Return 1 - IoU as the loss
-        return 1 - iou.mean()
-
+# IoU Metric for Segmentation
 class IoUMetric(nn.Module):
     def __init__(self, num_classes, smooth=1e-6):
         super(IoUMetric, self).__init__()
@@ -48,23 +24,15 @@ class IoUMetric(nn.Module):
         self.num_classes = num_classes
 
     def forward(self, preds, targets):
-        # Convert logits to class indices (b, h, w)
-        preds = torch.argmax(preds, dim=1)  # Shape: (b, h, w)
-        
-        # Create one-hot encoded masks for predictions and targets
+        preds = torch.argmax(preds, dim=1)  # Convert logits to class indices
         preds_one_hot = torch.nn.functional.one_hot(preds, num_classes=self.num_classes).permute(0, 3, 1, 2).float()
         targets_one_hot = torch.nn.functional.one_hot(targets, num_classes=self.num_classes).permute(0, 3, 1, 2).float()
-        
-        # Calculate intersection and union
         intersection = (preds_one_hot * targets_one_hot).sum(dim=(2, 3))
         union = preds_one_hot.sum(dim=(2, 3)) + targets_one_hot.sum(dim=(2, 3)) - intersection
-        
-        # Calculate IoU
         iou = (intersection + self.smooth) / (union + self.smooth)
-        
         return iou.mean()
 
-def train(model_name="detector", num_epoch=10, lr=1e-3, patience=5):
+def train(model_name="detector", num_epoch=50, lr=1e-3, patience=5):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # Load dataset
@@ -75,14 +43,14 @@ def train(model_name="detector", num_epoch=10, lr=1e-3, patience=5):
     model = Detector().to(device)
 
     # Loss functions
-    criterion_segmentation = IoULoss(num_classes=3)  # Pass the number of classes
+    criterion_segmentation = nn.CrossEntropyLoss()  # Use CrossEntropyLoss for segmentation
     criterion_depth = nn.L1Loss()
 
     # Optimizer
     optimizer = optim.Adam(model.parameters(), lr=lr)
     scheduler = ReduceLROnPlateau(optimizer, 'min', patience=patience, factor=0.5, verbose=True)
 
-    iou_metric = IoUMetric(num_classes=3)  # Pass the number of classes
+    iou_metric = IoUMetric(num_classes=3)
 
     # Training loop
     best_val_loss = float('inf')
@@ -94,7 +62,7 @@ def train(model_name="detector", num_epoch=10, lr=1e-3, patience=5):
 
         for batch in train_loader:
             images = batch['image'].to(device)
-            segmentation_labels = batch['track'].to(device).long()  # Ensure labels are long type
+            segmentation_labels = batch['track'].to(device).long()
             depth_labels = batch['depth'].to(device).unsqueeze(1)
 
             optimizer.zero_grad()
@@ -121,7 +89,7 @@ def train(model_name="detector", num_epoch=10, lr=1e-3, patience=5):
         with torch.no_grad():
             for batch in val_loader:
                 images = batch['image'].to(device)
-                segmentation_labels = batch['track'].to(device).long()  # Ensure labels are long type
+                segmentation_labels = batch['track'].to(device).long()
                 depth_labels = batch['depth'].to(device).unsqueeze(1)
 
                 segmentation_pred, depth_pred = model(images)
