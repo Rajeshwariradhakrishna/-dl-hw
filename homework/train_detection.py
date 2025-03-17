@@ -2,9 +2,10 @@ import torch
 import torch.optim as optim
 import torch.nn as nn
 import os
+from torchvision import transforms
 from homework.datasets.drive_dataset import load_data
 from models import Detector, HOMEWORK_DIR
-from torch.optim.lr_scheduler import ReduceLROnPlateau
+from torch.optim.lr_scheduler import CosineAnnealingLR
 
 # Define log directory
 log_dir = str(HOMEWORK_DIR)
@@ -16,22 +17,19 @@ def save_model(model, model_name, log_dir):
     torch.save(model.state_dict(), model_path)
     print(f"Model saved to {model_path}")
 
-# Tversky Loss for Segmentation
-class TverskyLoss(nn.Module):
-    def __init__(self, alpha=0.7, beta=0.3, smooth=1e-6):
-        super(TverskyLoss, self).__init__()
-        self.alpha = alpha  # Weight for false positives
-        self.beta = beta    # Weight for false negatives
+# Dice Loss for Segmentation
+class DiceLoss(nn.Module):
+    def __init__(self, smooth=1e-6):
+        super(DiceLoss, self).__init__()
         self.smooth = smooth
 
     def forward(self, preds, targets):
-        preds = torch.softmax(preds, dim=1)  # Convert logits to probabilities
+        preds = torch.softmax(preds, dim=1)
         targets_one_hot = torch.nn.functional.one_hot(targets, num_classes=preds.shape[1]).permute(0, 3, 1, 2).float()
         intersection = (preds * targets_one_hot).sum(dim=(2, 3))
-        fps = (preds * (1 - targets_one_hot)).sum(dim=(2, 3))
-        fns = ((1 - preds) * targets_one_hot).sum(dim=(2, 3))
-        tversky = (intersection + self.smooth) / (intersection + self.alpha * fps + self.beta * fns + self.smooth)
-        return 1 - tversky.mean()
+        union = preds.sum(dim=(2, 3)) + targets_one_hot.sum(dim=(2, 3))
+        dice = (2 * intersection + self.smooth) / (union + self.smooth)
+        return 1 - dice.mean()
 
 # Combined Depth Loss (L1 + MSE)
 class CombinedDepthLoss(nn.Module):
@@ -63,33 +61,37 @@ class IoUMetric(nn.Module):
         iou = (intersection + self.smooth) / (union + self.smooth)
         return iou.mean()
 
-def train(model_name="detector", num_epoch=50, lr=1e-3, patience=5):
+def train(model_name="detector", num_epoch=100, lr=1e-3, patience=10):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # Load dataset
-    train_loader = load_data("drive_data/train")
-    val_loader = load_data("drive_data/val")
+    # Data Augmentation
+    train_transform = transforms.Compose([
+        transforms.RandomHorizontalFlip(),
+        transforms.RandomRotation(10),
+        transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2),
+        transforms.ToTensor(),
+    ])
+    val_transform = transforms.Compose([
+        transforms.ToTensor(),
+    ])
+
+    # Load dataset with augmentations
+    train_loader = load_data("drive_data/train", transform=train_transform)
+    val_loader = load_data("drive_data/val", transform=val_transform)
 
     # Initialize model
     model = Detector().to(device)
 
     # Loss functions
-    criterion_segmentation = TverskyLoss(alpha=0.7, beta=0.3)  # Use Tversky Loss for segmentation
-    criterion_depth = CombinedDepthLoss(l1_weight=0.8, mse_weight=0.2)  # Combine L1 and MSE Loss for depth
+    criterion_segmentation = DiceLoss()  # Use Dice Loss for segmentation
+    criterion_depth = CombinedDepthLoss(l1_weight=0.8, mse_weight=0.2)
 
-    # Optimizer
-    optimizer = optim.Adam(model.parameters(), lr=lr)
-    scheduler = ReduceLROnPlateau(optimizer, 'min', patience=patience, factor=0.5, verbose=True)
+    # Optimizer with weight decay
+    optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=1e-4)
+    scheduler = CosineAnnealingLR(optimizer, T_max=num_epoch, eta_min=1e-5)
 
+    # Metrics
     iou_metric = IoUMetric(num_classes=3)
-
-    # Metrics tracking
-    metrics = {
-        "train_iou": [],
-        "val_iou": [],
-        "train_depth_error": [],
-        "val_depth_error": [],
-    }
 
     # Training loop
     best_val_loss = float('inf')
@@ -111,7 +113,6 @@ def train(model_name="detector", num_epoch=50, lr=1e-3, patience=5):
             loss_depth = criterion_depth(depth_pred, depth_labels)
             loss = loss_segmentation + loss_depth
 
-            # Check for NaN values
             if torch.isnan(loss).any():
                 print("NaN detected in loss. Stopping training.")
                 return
@@ -119,7 +120,6 @@ def train(model_name="detector", num_epoch=50, lr=1e-3, patience=5):
             loss.backward()
             optimizer.step()
 
-            # Compute metrics
             iou_value = iou_metric(segmentation_pred, segmentation_labels).item()
             depth_error = loss_depth.item()
 
@@ -127,13 +127,9 @@ def train(model_name="detector", num_epoch=50, lr=1e-3, patience=5):
             total_train_iou += iou_value
             total_train_depth_error += depth_error
 
-        # Record training metrics
         avg_train_loss = total_train_loss / len(train_loader)
         avg_train_iou = total_train_iou / len(train_loader)
         avg_train_depth_error = total_train_depth_error / len(train_loader)
-        metrics["train_iou"].append(avg_train_iou)
-        metrics["train_depth_error"].append(avg_train_depth_error)
-
         print(f"Epoch [{epoch + 1}/{num_epoch}] - Train Loss: {avg_train_loss:.4f}, Train IoU: {avg_train_iou:.4f}, Train Depth Error: {avg_train_depth_error:.4f}")
 
         # Validation
@@ -152,12 +148,10 @@ def train(model_name="detector", num_epoch=50, lr=1e-3, patience=5):
                 loss_depth = criterion_depth(depth_pred, depth_labels)
                 loss = loss_segmentation + loss_depth
 
-                # Check for NaN values
                 if torch.isnan(loss).any():
                     print("NaN detected in validation loss. Stopping training.")
                     return
 
-                # Compute metrics
                 iou_value = iou_metric(segmentation_pred, segmentation_labels).item()
                 depth_error = loss_depth.item()
 
@@ -165,13 +159,9 @@ def train(model_name="detector", num_epoch=50, lr=1e-3, patience=5):
                 total_val_iou += iou_value
                 total_val_depth_error += depth_error
 
-        # Record validation metrics
         avg_val_loss = total_val_loss / len(val_loader)
         avg_val_iou = total_val_iou / len(val_loader)
         avg_val_depth_error = total_val_depth_error / len(val_loader)
-        metrics["val_iou"].append(avg_val_iou)
-        metrics["val_depth_error"].append(avg_val_depth_error)
-
         print(f"Epoch [{epoch + 1}/{num_epoch}] - Val Loss: {avg_val_loss:.4f}, Val IoU: {avg_val_iou:.4f}, Val Depth Error: {avg_val_depth_error:.4f}")
 
         # Check for improvement
@@ -185,9 +175,9 @@ def train(model_name="detector", num_epoch=50, lr=1e-3, patience=5):
                 print(f"Early stopping at epoch {epoch + 1} with best validation loss: {best_val_loss:.4f}")
                 break
 
-        scheduler.step(avg_val_loss)
+        scheduler.step()
 
     print("Training complete!")
 
 if __name__ == "__main__":
-    train(model_name="detector", num_epoch=50, lr=1e-3, patience=5)
+    train(model_name="detector", num_epoch=100, lr=1e-3, patience=10)
