@@ -32,6 +32,7 @@ class FocalTverskyLoss(nn.Module):
         fps = (preds * (1 - targets_one_hot)).sum(dim=(2, 3))
         fns = ((1 - preds) * targets_one_hot).sum(dim=(2, 3))
         tversky = (intersection + self.smooth) / (intersection + self.alpha * fps + self.beta * fns + self.smooth)
+        tversky = torch.clamp(tversky, 1e-6, 1.0 - 1e-6)  # Clamp to avoid extreme values
         focal_tversky = (1 - tversky) ** self.gamma
         return focal_tversky.mean()
 
@@ -111,6 +112,11 @@ def train(model_name="detector", num_epoch=50, lr=1e-3, patience=5):
             loss_depth = criterion_depth(depth_pred, depth_labels)
             loss = loss_segmentation + loss_depth
 
+            # Check for NaN values
+            if torch.isnan(loss).any():
+                print("NaN detected in loss. Stopping training.")
+                return
+
             loss.backward()
             optimizer.step()
 
@@ -146,6 +152,11 @@ def train(model_name="detector", num_epoch=50, lr=1e-3, patience=5):
                 loss_segmentation = criterion_segmentation(segmentation_pred, segmentation_labels)
                 loss_depth = criterion_depth(depth_pred, depth_labels)
                 loss = loss_segmentation + loss_depth
+
+                # Check for NaN values
+                if torch.isnan(loss).any():
+                    print("NaN detected in validation loss. Stopping training.")
+                    return
 
                 # Compute metrics
                 iou_value = iou_metric(segmentation_pred, segmentation_labels).item()
