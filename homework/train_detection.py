@@ -16,33 +16,36 @@ def save_model(model, model_name, log_dir):
     torch.save(model.state_dict(), model_path)
     print(f"Model saved to {model_path}")
 
-# Dice Loss for Segmentation
-class DiceLoss(nn.Module):
-    def __init__(self, smooth=1e-6):
-        super(DiceLoss, self).__init__()
+# Focal Tversky Loss for Segmentation
+class FocalTverskyLoss(nn.Module):
+    def __init__(self, alpha=0.7, beta=0.3, gamma=0.75, smooth=1e-6):
+        super(FocalTverskyLoss, self).__init__()
+        self.alpha = alpha  # Weight for false positives
+        self.beta = beta    # Weight for false negatives
+        self.gamma = gamma  # Focal parameter
         self.smooth = smooth
 
     def forward(self, preds, targets):
         preds = torch.softmax(preds, dim=1)  # Convert logits to probabilities
         targets_one_hot = torch.nn.functional.one_hot(targets, num_classes=preds.shape[1]).permute(0, 3, 1, 2).float()
         intersection = (preds * targets_one_hot).sum(dim=(2, 3))
-        union = preds.sum(dim=(2, 3)) + targets_one_hot.sum(dim=(2, 3))
-        dice = (2 * intersection + self.smooth) / (union + self.smooth)
-        return 1 - dice.mean()
+        fps = (preds * (1 - targets_one_hot)).sum(dim=(2, 3))
+        fns = ((1 - preds) * targets_one_hot).sum(dim=(2, 3))
+        tversky = (intersection + self.smooth) / (intersection + self.alpha * fps + self.beta * fns + self.smooth)
+        focal_tversky = (1 - tversky) ** self.gamma
+        return focal_tversky.mean()
 
-# Combined Depth Loss (L1 + MSE)
-class CombinedDepthLoss(nn.Module):
-    def __init__(self, l1_weight=0.8, mse_weight=0.2):
-        super(CombinedDepthLoss, self).__init__()
-        self.l1_loss = nn.L1Loss()
-        self.mse_loss = nn.MSELoss()
-        self.l1_weight = l1_weight
-        self.mse_weight = mse_weight
+# Huber Loss for Depth Regression
+class HuberLoss(nn.Module):
+    def __init__(self, delta=1.0):
+        super(HuberLoss, self).__init__()
+        self.delta = delta
 
     def forward(self, preds, targets):
-        l1_loss = self.l1_loss(preds, targets)
-        mse_loss = self.mse_loss(preds, targets)
-        return self.l1_weight * l1_loss + self.mse_weight * mse_loss
+        residual = torch.abs(preds - targets)
+        condition = residual < self.delta
+        loss = torch.where(condition, 0.5 * residual ** 2, self.delta * (residual - 0.5 * self.delta))
+        return loss.mean()
 
 # IoU Metric for Segmentation
 class IoUMetric(nn.Module):
@@ -71,8 +74,8 @@ def train(model_name="detector", num_epoch=50, lr=1e-3, patience=5):
     model = Detector().to(device)
 
     # Loss functions
-    criterion_segmentation = DiceLoss()  # Use Dice Loss for segmentation
-    criterion_depth = CombinedDepthLoss(l1_weight=0.8, mse_weight=0.2)  # Combine L1 and MSE Loss for depth
+    criterion_segmentation = FocalTverskyLoss(alpha=0.7, beta=0.3, gamma=0.75)  # Use Focal Tversky Loss for segmentation
+    criterion_depth = HuberLoss(delta=1.0)  # Use Huber Loss for depth regression
 
     # Optimizer
     optimizer = optim.Adam(model.parameters(), lr=lr)
