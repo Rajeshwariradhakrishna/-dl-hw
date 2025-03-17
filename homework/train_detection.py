@@ -16,6 +16,20 @@ def save_model(model, model_name, log_dir):
     torch.save(model.state_dict(), model_path)
     print(f"Model saved to {model_path}")
 
+# Dice Loss for Segmentation
+class DiceLoss(nn.Module):
+    def __init__(self, smooth=1e-6):
+        super(DiceLoss, self).__init__()
+        self.smooth = smooth
+
+    def forward(self, preds, targets):
+        preds = torch.softmax(preds, dim=1)  # Convert logits to probabilities
+        targets_one_hot = torch.nn.functional.one_hot(targets, num_classes=preds.shape[1]).permute(0, 3, 1, 2).float()
+        intersection = (preds * targets_one_hot).sum(dim=(2, 3))
+        union = preds.sum(dim=(2, 3)) + targets_one_hot.sum(dim=(2, 3))
+        dice = (2 * intersection + self.smooth) / (union + self.smooth)
+        return 1 - dice.mean()
+
 # IoU Metric for Segmentation
 class IoUMetric(nn.Module):
     def __init__(self, num_classes, smooth=1e-6):
@@ -43,8 +57,8 @@ def train(model_name="detector", num_epoch=50, lr=1e-3, patience=5):
     model = Detector().to(device)
 
     # Loss functions
-    criterion_segmentation = nn.CrossEntropyLoss()  # Use CrossEntropyLoss for segmentation
-    criterion_depth = nn.L1Loss()
+    criterion_segmentation = DiceLoss()  # Use Dice Loss for segmentation
+    criterion_depth = nn.L1Loss() + nn.MSELoss()  # Combine L1 and MSE Loss for depth
 
     # Optimizer
     optimizer = optim.Adam(model.parameters(), lr=lr)
