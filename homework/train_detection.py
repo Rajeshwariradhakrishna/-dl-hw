@@ -18,30 +18,50 @@ def save_model(model, model_name, log_dir):
 
 # IoU Loss for Segmentation
 class IoULoss(nn.Module):
-    def __init__(self, smooth=1e-6):
+    def __init__(self, num_classes, smooth=1e-6):
         super(IoULoss, self).__init__()
         self.smooth = smooth
+        self.num_classes = num_classes
 
     def forward(self, preds, targets):
-        preds = torch.sigmoid(preds)  # Convert logits to probabilities
-        preds = (preds > 0.5).float()  # Convert to binary mask
-        intersection = (preds * targets).sum(dim=(2, 3))
-        union = preds.sum(dim=(2, 3)) + targets.sum(dim=(2, 3)) - intersection
+        # Convert logits to class indices (b, h, w)
+        preds = torch.argmax(preds, dim=1)  # Shape: (b, h, w)
+        
+        # Create one-hot encoded masks for predictions and targets
+        preds_one_hot = torch.nn.functional.one_hot(preds, num_classes=self.num_classes).permute(0, 3, 1, 2).float()
+        targets_one_hot = torch.nn.functional.one_hot(targets, num_classes=self.num_classes).permute(0, 3, 1, 2).float()
+        
+        # Calculate intersection and union
+        intersection = (preds_one_hot * targets_one_hot).sum(dim=(2, 3))
+        union = preds_one_hot.sum(dim=(2, 3)) + targets_one_hot.sum(dim=(2, 3)) - intersection
+        
+        # Calculate IoU
         iou = (intersection + self.smooth) / (union + self.smooth)
+        
+        # Return 1 - IoU as the loss
         return 1 - iou.mean()
 
-# IoU Metric
 class IoUMetric(nn.Module):
-    def __init__(self, smooth=1e-6):
+    def __init__(self, num_classes, smooth=1e-6):
         super(IoUMetric, self).__init__()
         self.smooth = smooth
+        self.num_classes = num_classes
 
     def forward(self, preds, targets):
-        preds = torch.sigmoid(preds)
-        preds = (preds > 0.5).float()
-        intersection = (preds * targets).sum(dim=(2, 3))
-        union = preds.sum(dim=(2, 3)) + targets.sum(dim=(2, 3)) - intersection
+        # Convert logits to class indices (b, h, w)
+        preds = torch.argmax(preds, dim=1)  # Shape: (b, h, w)
+        
+        # Create one-hot encoded masks for predictions and targets
+        preds_one_hot = torch.nn.functional.one_hot(preds, num_classes=self.num_classes).permute(0, 3, 1, 2).float()
+        targets_one_hot = torch.nn.functional.one_hot(targets, num_classes=self.num_classes).permute(0, 3, 1, 2).float()
+        
+        # Calculate intersection and union
+        intersection = (preds_one_hot * targets_one_hot).sum(dim=(2, 3))
+        union = preds_one_hot.sum(dim=(2, 3)) + targets_one_hot.sum(dim=(2, 3)) - intersection
+        
+        # Calculate IoU
         iou = (intersection + self.smooth) / (union + self.smooth)
+        
         return iou.mean()
 
 def train(model_name="detector", num_epoch=10, lr=1e-3, patience=5):
@@ -55,14 +75,14 @@ def train(model_name="detector", num_epoch=10, lr=1e-3, patience=5):
     model = Detector().to(device)
 
     # Loss functions
-    criterion_segmentation = IoULoss()
+    criterion_segmentation = IoULoss(num_classes=3)  # Pass the number of classes
     criterion_depth = nn.L1Loss()
 
     # Optimizer
     optimizer = optim.Adam(model.parameters(), lr=lr)
     scheduler = ReduceLROnPlateau(optimizer, 'min', patience=patience, factor=0.5, verbose=True)
 
-    iou_metric = IoUMetric()
+    iou_metric = IoUMetric(num_classes=3)  # Pass the number of classes
 
     # Training loop
     best_val_loss = float('inf')
@@ -74,7 +94,7 @@ def train(model_name="detector", num_epoch=10, lr=1e-3, patience=5):
 
         for batch in train_loader:
             images = batch['image'].to(device)
-            segmentation_labels = batch['track'].to(device).float()
+            segmentation_labels = batch['track'].to(device).long()  # Ensure labels are long type
             depth_labels = batch['depth'].to(device).unsqueeze(1)
 
             optimizer.zero_grad()
@@ -101,7 +121,7 @@ def train(model_name="detector", num_epoch=10, lr=1e-3, patience=5):
         with torch.no_grad():
             for batch in val_loader:
                 images = batch['image'].to(device)
-                segmentation_labels = batch['track'].to(device).float()
+                segmentation_labels = batch['track'].to(device).long()  # Ensure labels are long type
                 depth_labels = batch['depth'].to(device).unsqueeze(1)
 
                 segmentation_pred, depth_pred = model(images)
