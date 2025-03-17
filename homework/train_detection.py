@@ -16,22 +16,19 @@ def save_model(model, model_name, log_dir):
     torch.save(model.state_dict(), model_path)
     print(f"Model saved to {model_path}")
 
-# Tversky Loss for Segmentation
-class TverskyLoss(nn.Module):
-    def __init__(self, alpha=0.7, beta=0.3, smooth=1e-6):
-        super(TverskyLoss, self).__init__()
-        self.alpha = alpha  # Weight for false positives
-        self.beta = beta    # Weight for false negatives
+# Dice Loss for Segmentation
+class DiceLoss(nn.Module):
+    def __init__(self, smooth=1e-6):
+        super(DiceLoss, self).__init__()
         self.smooth = smooth
 
     def forward(self, preds, targets):
         preds = torch.softmax(preds, dim=1)  # Convert logits to probabilities
         targets_one_hot = torch.nn.functional.one_hot(targets, num_classes=preds.shape[1]).permute(0, 3, 1, 2).float()
         intersection = (preds * targets_one_hot).sum(dim=(2, 3))
-        fps = (preds * (1 - targets_one_hot)).sum(dim=(2, 3))
-        fns = ((1 - preds) * targets_one_hot).sum(dim=(2, 3))
-        tversky = (intersection + self.smooth) / (intersection + self.alpha * fps + self.beta * fns + self.smooth)
-        return 1 - tversky.mean()
+        union = preds.sum(dim=(2, 3)) + targets_one_hot.sum(dim=(2, 3))
+        dice = (2 * intersection + self.smooth) / (union + self.smooth)
+        return 1 - dice.mean()
 
 # Combined Depth Loss (L1 + MSE)
 class CombinedDepthLoss(nn.Module):
@@ -74,7 +71,7 @@ def train(model_name="detector", num_epoch=50, lr=1e-3, patience=5):
     model = Detector().to(device)
 
     # Loss functions
-    criterion_segmentation = TverskyLoss(alpha=0.7, beta=0.3)  # Use Tversky Loss for segmentation
+    criterion_segmentation = DiceLoss()  # Use Dice Loss for segmentation
     criterion_depth = CombinedDepthLoss(l1_weight=0.8, mse_weight=0.2)  # Combine L1 and MSE Loss for depth
 
     # Optimizer
