@@ -110,8 +110,8 @@ def train(model_name="detector", num_epoch=50, lr=1e-3, patience=10):
     ])
 
     # Load dataset with augmentations
-    train_loader = load_data("drive_data/train")
-    val_loader = load_data("drive_data/val")
+    train_loader = load_data("drive_data/train", transform=train_transform)
+    val_loader = load_data("drive_data/val", transform=val_transform)
 
     # Initialize model
     model = Detector().to(device)
@@ -130,7 +130,7 @@ def train(model_name="detector", num_epoch=50, lr=1e-3, patience=10):
     detection_metric = DetectionMetric(num_classes=3)
 
     # Training loop
-    best_val_loss = float('inf')
+    best_val_iou = 0.0
     epochs_no_improve = 0
 
     for epoch in range(num_epoch):
@@ -192,14 +192,14 @@ def train(model_name="detector", num_epoch=50, lr=1e-3, patience=10):
         print(f"Epoch [{epoch + 1}/{num_epoch}] - Train IoU: {train_iou:.4f}, Val IoU: {val_iou:.4f}")
 
         # Check for improvement
-        if val_iou > best_val_loss:
-            best_val_loss = val_iou
+        if val_iou > best_val_iou:
+            best_val_iou = val_iou
             epochs_no_improve = 0
             save_model(model, model_name, log_dir)
         else:
             epochs_no_improve += 1
             if epochs_no_improve >= patience:
-                print(f"Early stopping at epoch {epoch + 1} with best validation IoU: {best_val_loss:.4f}")
+                print(f"Early stopping at epoch {epoch + 1} with best validation IoU: {best_val_iou:.4f}")
                 break
 
         scheduler.step()
