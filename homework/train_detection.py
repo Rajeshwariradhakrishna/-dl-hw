@@ -6,7 +6,15 @@ from torchvision import transforms, datasets
 from models import Detector, save_model, load_model
 
 # Training Function
-def train(model_name: str = "detector", num_epoch: int = 10):
+def train(model_name: str = "detector", num_epoch: int = 10, lr: float = 0.001):
+    """
+    Train the model.
+
+    Args:
+        model_name: Name of the model to train (default: "detector").
+        num_epoch: Number of training epochs (default: 10).
+        lr: Learning rate for the optimizer (default: 0.001).
+    """
     # Define transformations
     transform = transforms.Compose([
         transforms.Resize((96, 128)),  # Match the input size expected by the model
@@ -29,7 +37,7 @@ def train(model_name: str = "detector", num_epoch: int = 10):
 
     criterion_seg = nn.CrossEntropyLoss()  # For segmentation
     criterion_depth = nn.MSELoss()  # For depth estimation
-    optimizer = optim.Adam(model.parameters(), lr=0.001)
+    optimizer = optim.Adam(model.parameters(), lr=lr)  # Use lr argument
     scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.1)  # Learning rate scheduler
 
     # Training loop
