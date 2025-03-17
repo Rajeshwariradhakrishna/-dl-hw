@@ -52,13 +52,21 @@ def train(model_name="detector", num_epoch=50, lr=1e-3, patience=5):
 
     iou_metric = IoUMetric(num_classes=3)
 
+    # Metrics tracking
+    metrics = {
+        "train_iou": [],
+        "val_iou": [],
+        "train_depth_error": [],
+        "val_depth_error": [],
+    }
+
     # Training loop
     best_val_loss = float('inf')
     epochs_no_improve = 0
 
     for epoch in range(num_epoch):
         model.train()
-        total_train_loss, total_train_iou = 0, 0
+        total_train_loss, total_train_iou, total_train_depth_error = 0, 0, 0
 
         for batch in train_loader:
             images = batch['image'].to(device)
@@ -75,16 +83,26 @@ def train(model_name="detector", num_epoch=50, lr=1e-3, patience=5):
             loss.backward()
             optimizer.step()
 
-            total_train_loss += loss.item()
-            total_train_iou += iou_metric(segmentation_pred, segmentation_labels).item()
+            # Compute metrics
+            iou_value = iou_metric(segmentation_pred, segmentation_labels).item()
+            depth_error = loss_depth.item()
 
+            total_train_loss += loss.item()
+            total_train_iou += iou_value
+            total_train_depth_error += depth_error
+
+        # Record training metrics
         avg_train_loss = total_train_loss / len(train_loader)
         avg_train_iou = total_train_iou / len(train_loader)
-        print(f"Epoch [{epoch + 1}/{num_epoch}] - Train Loss: {avg_train_loss:.4f}, Train IoU: {avg_train_iou:.4f}")
+        avg_train_depth_error = total_train_depth_error / len(train_loader)
+        metrics["train_iou"].append(avg_train_iou)
+        metrics["train_depth_error"].append(avg_train_depth_error)
+
+        print(f"Epoch [{epoch + 1}/{num_epoch}] - Train Loss: {avg_train_loss:.4f}, Train IoU: {avg_train_iou:.4f}, Train Depth Error: {avg_train_depth_error:.4f}")
 
         # Validation
         model.eval()
-        total_val_loss, total_val_iou = 0, 0
+        total_val_loss, total_val_iou, total_val_depth_error = 0, 0, 0
 
         with torch.no_grad():
             for batch in val_loader:
@@ -98,12 +116,22 @@ def train(model_name="detector", num_epoch=50, lr=1e-3, patience=5):
                 loss_depth = criterion_depth(depth_pred, depth_labels)
                 loss = loss_segmentation + loss_depth
 
-                total_val_loss += loss.item()
-                total_val_iou += iou_metric(segmentation_pred, segmentation_labels).item()
+                # Compute metrics
+                iou_value = iou_metric(segmentation_pred, segmentation_labels).item()
+                depth_error = loss_depth.item()
 
+                total_val_loss += loss.item()
+                total_val_iou += iou_value
+                total_val_depth_error += depth_error
+
+        # Record validation metrics
         avg_val_loss = total_val_loss / len(val_loader)
         avg_val_iou = total_val_iou / len(val_loader)
-        print(f"Epoch [{epoch + 1}/{num_epoch}] - Val Loss: {avg_val_loss:.4f}, Val IoU: {avg_val_iou:.4f}")
+        avg_val_depth_error = total_val_depth_error / len(val_loader)
+        metrics["val_iou"].append(avg_val_iou)
+        metrics["val_depth_error"].append(avg_val_depth_error)
+
+        print(f"Epoch [{epoch + 1}/{num_epoch}] - Val Loss: {avg_val_loss:.4f}, Val IoU: {avg_val_iou:.4f}, Val Depth Error: {avg_val_depth_error:.4f}")
 
         # Check for improvement
         if avg_val_loss < best_val_loss:
