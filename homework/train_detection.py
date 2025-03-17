@@ -47,6 +47,28 @@ class CombinedDepthLoss(nn.Module):
         mse_loss = self.mse_loss(preds, targets)
         return self.l1_weight * l1_loss + self.mse_weight * mse_loss
 
+# Detection Metric for IoU
+class DetectionMetric:
+    def __init__(self, num_classes=3):
+        self.num_classes = num_classes
+        self.reset()
+
+    def reset(self):
+        self.intersection = torch.zeros(self.num_classes)
+        self.union = torch.zeros(self.num_classes)
+
+    def update(self, preds, targets):
+        preds = torch.argmax(preds, dim=1)
+        for cls in range(self.num_classes):
+            pred_mask = (preds == cls)
+            target_mask = (targets == cls)
+            self.intersection[cls] += (pred_mask & target_mask).sum().item()
+            self.union[cls] += (pred_mask | target_mask).sum().item()
+
+    def compute(self):
+        iou = self.intersection / (self.union + 1e-6)
+        return {"iou": iou.mean().item()}
+
 # Visualize Predictions
 def visualize_predictions(model, val_loader, device):
     model.eval()
@@ -88,8 +110,8 @@ def train(model_name="detector", num_epoch=50, lr=1e-3, patience=10):
     ])
 
     # Load dataset with augmentations
-    train_loader = load_data("drive_data/train")
-    val_loader = load_data("drive_data/val")
+    train_loader = load_data("drive_data/train", transform=train_transform)
+    val_loader = load_data("drive_data/val", transform=val_transform)
 
     # Initialize model
     model = Detector().to(device)
@@ -102,13 +124,18 @@ def train(model_name="detector", num_epoch=50, lr=1e-3, patience=10):
     optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
     scheduler = CosineAnnealingLR(optimizer, T_max=num_epoch, eta_min=1e-5)
 
+    # Metrics
+    train_metrics = {"iou": [], "depth_error": []}
+    val_metrics = {"iou": [], "depth_error": []}
+    detection_metric = DetectionMetric(num_classes=3)
+
     # Training loop
     best_val_loss = float('inf')
     epochs_no_improve = 0
 
     for epoch in range(num_epoch):
         model.train()
-        total_train_loss, total_train_iou, total_train_depth_error = 0, 0, 0
+        detection_metric.reset()
 
         for batch in train_loader:
             images = batch['image'].to(device)
@@ -129,22 +156,17 @@ def train(model_name="detector", num_epoch=50, lr=1e-3, patience=10):
             loss.backward()
             optimizer.step()
 
-            # Compute IoU
-            iou_value = (1 - loss_segmentation).item()
-            depth_error = loss_depth.item()
+            # Update metrics
+            detection_metric.update(segmentation_pred, segmentation_labels)
+            train_metrics["depth_error"].append(loss_depth.item())
 
-            total_train_loss += loss.item()
-            total_train_iou += iou_value
-            total_train_depth_error += depth_error
-
-        avg_train_loss = total_train_loss / len(train_loader)
-        avg_train_iou = total_train_iou / len(train_loader)
-        avg_train_depth_error = total_train_depth_error / len(train_loader)
-        print(f"Epoch [{epoch + 1}/{num_epoch}] - Train Loss: {avg_train_loss:.4f}, Train IoU: {avg_train_iou:.4f}, Train Depth Error: {avg_train_depth_error:.4f}")
+        # Compute training IoU
+        train_iou = detection_metric.compute()["iou"]
+        train_metrics["iou"].append(train_iou)
 
         # Validation
         model.eval()
-        total_val_loss, total_val_iou, total_val_depth_error = 0, 0, 0
+        detection_metric.reset()
 
         with torch.no_grad():
             for batch in val_loader:
@@ -158,27 +180,26 @@ def train(model_name="detector", num_epoch=50, lr=1e-3, patience=10):
                 loss_depth = criterion_depth(depth_pred, depth_labels)
                 loss = loss_segmentation + loss_depth
 
-                iou_value = (1 - loss_segmentation).item()
-                depth_error = loss_depth.item()
+                # Update metrics
+                detection_metric.update(segmentation_pred, segmentation_labels)
+                val_metrics["depth_error"].append(loss_depth.item())
 
-                total_val_loss += loss.item()
-                total_val_iou += iou_value
-                total_val_depth_error += depth_error
+        # Compute validation IoU
+        val_iou = detection_metric.compute()["iou"]
+        val_metrics["iou"].append(val_iou)
 
-        avg_val_loss = total_val_loss / len(val_loader)
-        avg_val_iou = total_val_iou / len(val_loader)
-        avg_val_depth_error = total_val_depth_error / len(val_loader)
-        print(f"Epoch [{epoch + 1}/{num_epoch}] - Val Loss: {avg_val_loss:.4f}, Val IoU: {avg_val_iou:.4f}, Val Depth Error: {avg_val_depth_error:.4f}")
+        # Print metrics
+        print(f"Epoch [{epoch + 1}/{num_epoch}] - Train IoU: {train_iou:.4f}, Val IoU: {val_iou:.4f}")
 
         # Check for improvement
-        if avg_val_loss < best_val_loss:
-            best_val_loss = avg_val_loss
+        if val_iou > best_val_loss:
+            best_val_loss = val_iou
             epochs_no_improve = 0
             save_model(model, model_name, log_dir)
         else:
             epochs_no_improve += 1
             if epochs_no_improve >= patience:
-                print(f"Early stopping at epoch {epoch + 1} with best validation loss: {best_val_loss:.4f}")
+                print(f"Early stopping at epoch {epoch + 1} with best validation IoU: {best_val_loss:.4f}")
                 break
 
         scheduler.step()
