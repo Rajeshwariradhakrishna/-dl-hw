@@ -19,19 +19,14 @@ def save_model(model, model_name, log_dir):
     torch.save(model.state_dict(), model_path)
     print(f"Model saved to {model_path}")
 
-# IoU Loss for Segmentation
-class IoULoss(nn.Module):
-    def __init__(self, smooth=1e-6):
-        super(IoULoss, self).__init__()
-        self.smooth = smooth
+# Cross-Entropy Loss for Segmentation
+class CrossEntropyLoss(nn.Module):
+    def __init__(self):
+        super(CrossEntropyLoss, self).__init__()
+        self.criterion = nn.CrossEntropyLoss()
 
     def forward(self, preds, targets):
-        preds = torch.softmax(preds, dim=1)
-        targets_one_hot = torch.nn.functional.one_hot(targets, num_classes=preds.shape[1]).permute(0, 3, 1, 2).float()
-        intersection = (preds * targets_one_hot).sum(dim=(2, 3))
-        union = preds.sum(dim=(2, 3)) + targets_one_hot.sum(dim=(2, 3)) - intersection
-        iou = (intersection + self.smooth) / (union + self.smooth)
-        return 1 - iou.mean()
+        return self.criterion(preds, targets)
 
 # Combined Depth Loss (L1 + MSE)
 class CombinedDepthLoss(nn.Module):
@@ -47,27 +42,25 @@ class CombinedDepthLoss(nn.Module):
         mse_loss = self.mse_loss(preds, targets)
         return self.l1_weight * l1_loss + self.mse_weight * mse_loss
 
-# Detection Metric for IoU
-class DetectionMetric:
-    def __init__(self, num_classes=3):
+# Confusion Matrix for IoU Calculation
+class ConfusionMatrix:
+    def __init__(self, num_classes):
         self.num_classes = num_classes
         self.reset()
 
     def reset(self):
-        self.intersection = torch.zeros(self.num_classes)
-        self.union = torch.zeros(self.num_classes)
+        self.confusion_matrix = torch.zeros((self.num_classes, self.num_classes))
 
     def update(self, preds, targets):
         preds = torch.argmax(preds, dim=1)
-        for cls in range(self.num_classes):
-            pred_mask = (preds == cls)
-            target_mask = (targets == cls)
-            self.intersection[cls] += (pred_mask & target_mask).sum().item()
-            self.union[cls] += (pred_mask | target_mask).sum().item()
+        for t, p in zip(targets.view(-1), preds.view(-1)):
+            self.confusion_matrix[t.long(), p.long()] += 1
 
-    def compute(self):
-        iou = self.intersection / (self.union + 1e-6)
-        return {"iou": iou.mean().item()}
+    def compute_iou(self):
+        intersection = torch.diag(self.confusion_matrix)
+        union = self.confusion_matrix.sum(0) + self.confusion_matrix.sum(1) - intersection
+        iou = intersection / (union + 1e-6)
+        return iou.mean().item()
 
 # Visualize Predictions
 def visualize_predictions(model, val_loader, device):
@@ -117,7 +110,7 @@ def train(model_name="detector", num_epoch=50, lr=1e-3, patience=10):
     model = Detector().to(device)
 
     # Loss functions
-    criterion_segmentation = IoULoss()  # Use IoU Loss for segmentation
+    criterion_segmentation = CrossEntropyLoss()  # Use Cross-Entropy Loss for segmentation
     criterion_depth = CombinedDepthLoss(l1_weight=0.8, mse_weight=0.2)
 
     # Optimizer with weight decay
@@ -127,7 +120,7 @@ def train(model_name="detector", num_epoch=50, lr=1e-3, patience=10):
     # Metrics
     train_metrics = {"iou": [], "depth_error": []}
     val_metrics = {"iou": [], "depth_error": []}
-    detection_metric = DetectionMetric(num_classes=3)
+    confusion_matrix = ConfusionMatrix(num_classes=3)
 
     # Training loop
     best_val_iou = 0.0
@@ -135,7 +128,7 @@ def train(model_name="detector", num_epoch=50, lr=1e-3, patience=10):
 
     for epoch in range(num_epoch):
         model.train()
-        detection_metric.reset()
+        confusion_matrix.reset()
 
         for batch in train_loader:
             images = batch['image'].to(device)
@@ -156,17 +149,17 @@ def train(model_name="detector", num_epoch=50, lr=1e-3, patience=10):
             loss.backward()
             optimizer.step()
 
-            # Update metrics
-            detection_metric.update(segmentation_pred, segmentation_labels)
+            # Update confusion matrix
+            confusion_matrix.update(segmentation_pred, segmentation_labels)
             train_metrics["depth_error"].append(loss_depth.item())
 
         # Compute training IoU
-        train_iou = detection_metric.compute()["iou"]
+        train_iou = confusion_matrix.compute_iou()
         train_metrics["iou"].append(train_iou)
 
         # Validation
         model.eval()
-        detection_metric.reset()
+        confusion_matrix.reset()
 
         with torch.no_grad():
             for batch in val_loader:
@@ -180,12 +173,12 @@ def train(model_name="detector", num_epoch=50, lr=1e-3, patience=10):
                 loss_depth = criterion_depth(depth_pred, depth_labels)
                 loss = loss_segmentation + loss_depth
 
-                # Update metrics
-                detection_metric.update(segmentation_pred, segmentation_labels)
+                # Update confusion matrix
+                confusion_matrix.update(segmentation_pred, segmentation_labels)
                 val_metrics["depth_error"].append(loss_depth.item())
 
         # Compute validation IoU
-        val_iou = detection_metric.compute()["iou"]
+        val_iou = confusion_matrix.compute_iou()
         val_metrics["iou"].append(val_iou)
 
         # Print metrics
