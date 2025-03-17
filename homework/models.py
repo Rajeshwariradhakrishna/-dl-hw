@@ -103,22 +103,33 @@ class Detector(torch.nn.Module):
 
         # TODO: implement
         # Down-sampling (Encoder) Layers
-        self.conv1 = nn.Conv2d(in_channels, 32, kernel_size=3, stride=2, padding=1)
-        self.conv2 = nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1)
-        self.conv3 = nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1)
-        self.conv4 = nn.Conv2d(128, 256, kernel_size=3, stride=2, padding=1)
+        self.encoder1 = self._block(in_channels, 64)
+        self.encoder2 = self._block(64, 128)
+        self.encoder3 = self._block(128, 256)
+        self.encoder4 = self._block(256, 512)
+        self.pool = nn.MaxPool2d(2, 2)
 
-        # Decoder (Up-sampling)
-        self.upconv1 = nn.ConvTranspose2d(256, 128, kernel_size=3, stride=2, padding=1, output_padding=1)
-        self.upconv2 = nn.ConvTranspose2d(128, 64, kernel_size=3, stride=2, padding=1, output_padding=1)
-        self.upconv3 = nn.ConvTranspose2d(64, 32, kernel_size=3, stride=2, padding=1, output_padding=1)
-        self.upconv4 = nn.ConvTranspose2d(32, 16, kernel_size=3, stride=2, padding=1, output_padding=1)
+        # Decoder with skip connections
+        self.upconv1 = nn.ConvTranspose2d(512, 256, kernel_size=2, stride=2)
+        self.decoder1 = self._block(512, 256)
+        self.upconv2 = nn.ConvTranspose2d(256, 128, kernel_size=2, stride=2)
+        self.decoder2 = self._block(256, 128)
+        self.upconv3 = nn.ConvTranspose2d(128, 64, kernel_size=2, stride=2)
+        self.decoder3 = self._block(128, 64)
 
-        # Segmentation Head
-        self.segmentation_conv = nn.Conv2d(16, num_classes, kernel_size=1)
+        # Segmentation and Depth Heads
+        self.segmentation_conv = nn.Conv2d(64, num_classes, kernel_size=1)
+        self.depth_conv = nn.Conv2d(64, 1, kernel_size=1)
 
-        # Depth Head
-        self.depth_conv = nn.Conv2d(16, 1, kernel_size=1)
+        def _block(self, in_channels, out_channels):
+            return nn.Sequential(
+                nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1),
+                nn.BatchNorm2d(out_channels),
+                nn.ReLU(inplace=True),
+                nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1),
+                nn.BatchNorm2d(out_channels),
+                nn.ReLU(inplace=True),
+        )
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """
@@ -137,22 +148,27 @@ class Detector(torch.nn.Module):
         z = (x - self.input_mean[None, :, None, None]) / self.input_std[None, :, None, None]
 
         # TODO: replace with actual forward pass
-         # Encoder: down-sampling the spatial dimensions
-        x1 = torch.relu(self.conv1(z))
-        x2 = torch.relu(self.conv2(x1))
-        x3 = torch.relu(self.conv3(x2))
-        x4 = torch.relu(self.conv4(x3))
+        # Encoder: down-sampling the spatial dimensions
+        # Encoder
+        e1 = self.encoder1(x)
+        e2 = self.encoder2(self.pool(e1))
+        e3 = self.encoder3(self.pool(e2))
+        e4 = self.encoder4(self.pool(e3))
 
-        # Decoder: up-sampling to recover the original spatial dimensions
-        x = torch.relu(self.upconv1(x4))
-        x = torch.relu(self.upconv2(x))
-        x = torch.relu(self.upconv3(x))
-        x = torch.relu(self.upconv4(x))
+        # Decoder with skip connections
+        d1 = self.decoder1(torch.cat([self.upconv1(e4), e3], dim=1))
+        d2 = self.decoder2(torch.cat([self.upconv2(d1), e2], dim=1))
+        d3 = self.decoder3(torch.cat([self.upconv3(d2), e1], dim=1))
 
-        logits = self.segmentation_conv(x)
-        raw_depth = self.depth_conv(x)
+        # Segmentation and Depth Heads
+        segmentation_logits = self.segmentation_conv(d3)
+        raw_depth = self.depth_conv(d3)
 
-        return logits, raw_depth
+        # Resize to match target dimensions
+        segmentation_logits = F.interpolate(segmentation_logits, size=(96, 128), mode='bilinear', align_corners=False)
+        raw_depth = F.interpolate(raw_depth, size=(96, 128), mode='bilinear', align_corners=False)
+
+        return segmentation_logits, raw_depth
 
     def predict(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """
