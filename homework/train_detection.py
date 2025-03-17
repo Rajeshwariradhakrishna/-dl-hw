@@ -2,12 +2,9 @@ import torch
 import torch.optim as optim
 import torch.nn as nn
 import os
-import numpy as np
-import matplotlib.pyplot as plt
-from torchvision import transforms
 from homework.datasets.drive_dataset import load_data
-from models import HOMEWORK_DIR
-from torch.optim.lr_scheduler import CosineAnnealingLR
+from models import Detector, HOMEWORK_DIR
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 
 # Define log directory
 log_dir = str(HOMEWORK_DIR)
@@ -19,19 +16,19 @@ def save_model(model, model_name, log_dir):
     torch.save(model.state_dict(), model_path)
     print(f"Model saved to {model_path}")
 
-# IoU Loss for Segmentation
-class IoULoss(nn.Module):
+# Dice Loss for Segmentation
+class DiceLoss(nn.Module):
     def __init__(self, smooth=1e-6):
-        super(IoULoss, self).__init__()
+        super(DiceLoss, self).__init__()
         self.smooth = smooth
 
     def forward(self, preds, targets):
-        preds = torch.softmax(preds, dim=1)
+        preds = torch.softmax(preds, dim=1)  # Convert logits to probabilities
         targets_one_hot = torch.nn.functional.one_hot(targets, num_classes=preds.shape[1]).permute(0, 3, 1, 2).float()
         intersection = (preds * targets_one_hot).sum(dim=(2, 3))
-        union = preds.sum(dim=(2, 3)) + targets_one_hot.sum(dim=(2, 3)) - intersection
-        iou = (intersection + self.smooth) / (union + self.smooth)
-        return 1 - iou.mean()
+        union = preds.sum(dim=(2, 3)) + targets_one_hot.sum(dim=(2, 3))
+        dice = (2 * intersection + self.smooth) / (union + self.smooth)
+        return 1 - dice.mean()
 
 # Combined Depth Loss (L1 + MSE)
 class CombinedDepthLoss(nn.Module):
@@ -47,89 +44,26 @@ class CombinedDepthLoss(nn.Module):
         mse_loss = self.mse_loss(preds, targets)
         return self.l1_weight * l1_loss + self.mse_weight * mse_loss
 
-# U-Net Model for Segmentation
-class UNet(nn.Module):
-    def __init__(self, in_channels=3, out_channels=3):
-        super(UNet, self).__init__()
-        # Define U-Net architecture here (encoder-decoder with skip connections)
-        # Example implementation:
-        self.encoder = nn.Sequential(
-            nn.Conv2d(in_channels, 64, kernel_size=3, padding=1),
-            nn.ReLU(),
-            nn.Conv2d(64, 64, kernel_size=3, padding=1),
-            nn.ReLU(),
-            nn.MaxPool2d(kernel_size=2, stride=2)
-        )
-        self.decoder = nn.Sequential(
-            nn.Conv2d(64, 64, kernel_size=3, padding=1),
-            nn.ReLU(),
-            nn.Conv2d(64, out_channels, kernel_size=3, padding=1),
-            nn.ReLU(),
-            nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
-        )
+# IoU Metric for Segmentation
+class IoUMetric(nn.Module):
+    def __init__(self, num_classes, smooth=1e-6):
+        super(IoUMetric, self).__init__()
+        self.smooth = smooth
+        self.num_classes = num_classes
 
-    def forward(self, x):
-        x = self.encoder(x)
-        x = self.decoder(x)
-        return x
+    def forward(self, preds, targets):
+        preds = torch.argmax(preds, dim=1)  # Convert logits to class indices
+        preds_one_hot = torch.nn.functional.one_hot(preds, num_classes=self.num_classes).permute(0, 3, 1, 2).float()
+        targets_one_hot = torch.nn.functional.one_hot(targets, num_classes=self.num_classes).permute(0, 3, 1, 2).float()
+        intersection = (preds_one_hot * targets_one_hot).sum(dim=(2, 3))
+        union = preds_one_hot.sum(dim=(2, 3)) + targets_one_hot.sum(dim=(2, 3)) - intersection
+        iou = (intersection + self.smooth) / (union + self.smooth)
+        return iou.mean()
 
-# Detector Model with U-Net for Segmentation
-class Detector(nn.Module):
-    def __init__(self):
-        super(Detector, self).__init__()
-        self.segmentation_model = UNet(in_channels=3, out_channels=3)  # 3 classes
-        self.depth_model = nn.Sequential(
-            nn.Conv2d(3, 64, kernel_size=3, padding=1),
-            nn.ReLU(),
-            nn.Conv2d(64, 1, kernel_size=1)
-        )
-
-    def forward(self, x):
-        segmentation = self.segmentation_model(x)
-        depth = self.depth_model(x)
-        return segmentation, depth
-
-# Visualize Predictions
-def visualize_predictions(model, val_loader, device):
-    model.eval()
-    with torch.no_grad():
-        for batch in val_loader:
-            images = batch['image'].to(device)
-            segmentation_labels = batch['track'].to(device).long()
-            segmentation_pred, _ = model(images)
-            segmentation_pred = torch.argmax(segmentation_pred, dim=1)
-
-            # Plot images, ground truth, and predictions
-            plt.figure(figsize=(10, 5))
-            plt.subplot(1, 3, 1)
-            plt.imshow(images[0].cpu().permute(1, 2, 0))
-            plt.title("Image")
-            plt.subplot(1, 3, 2)
-            plt.imshow(segmentation_labels[0].cpu(), cmap="jet")
-            plt.title("Ground Truth")
-            plt.subplot(1, 3, 3)
-            plt.imshow(segmentation_pred[0].cpu(), cmap="jet")
-            plt.title("Prediction")
-            plt.show()
-            break
-
-# Training Function
-def train(model_name="detector", num_epoch=50, lr=1e-3, patience=10):
+def train(model_name="detector", num_epoch=50, lr=1e-3, patience=5):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # Data Augmentation
-    train_transform = transforms.Compose([
-        transforms.RandomHorizontalFlip(),
-        transforms.RandomRotation(20),
-        transforms.RandomResizedCrop((256, 256), scale=(0.8, 1.0)),
-        transforms.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.3),
-        transforms.ToTensor(),
-    ])
-    val_transform = transforms.Compose([
-        transforms.ToTensor(),
-    ])
-
-    # Load dataset with augmentations
+    # Load dataset
     train_loader = load_data("drive_data/train")
     val_loader = load_data("drive_data/val")
 
@@ -137,12 +71,22 @@ def train(model_name="detector", num_epoch=50, lr=1e-3, patience=10):
     model = Detector().to(device)
 
     # Loss functions
-    criterion_segmentation = IoULoss()  # Use IoU Loss for segmentation
-    criterion_depth = CombinedDepthLoss(l1_weight=0.8, mse_weight=0.2)
+    criterion_segmentation = DiceLoss()  # Use Dice Loss for segmentation
+    criterion_depth = CombinedDepthLoss(l1_weight=0.8, mse_weight=0.2)  # Combine L1 and MSE Loss for depth
 
-    # Optimizer with weight decay
-    optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
-    scheduler = CosineAnnealingLR(optimizer, T_max=num_epoch, eta_min=1e-5)
+    # Optimizer
+    optimizer = optim.Adam(model.parameters(), lr=lr)
+    scheduler = ReduceLROnPlateau(optimizer, 'min', patience=patience, factor=0.5, verbose=True)
+
+    iou_metric = IoUMetric(num_classes=3)
+
+    # Metrics tracking
+    metrics = {
+        "train_iou": [],
+        "val_iou": [],
+        "train_depth_error": [],
+        "val_depth_error": [],
+    }
 
     # Training loop
     best_val_loss = float('inf')
@@ -164,6 +108,7 @@ def train(model_name="detector", num_epoch=50, lr=1e-3, patience=10):
             loss_depth = criterion_depth(depth_pred, depth_labels)
             loss = loss_segmentation + loss_depth
 
+            # Check for NaN values
             if torch.isnan(loss).any():
                 print("NaN detected in loss. Stopping training.")
                 return
@@ -171,17 +116,21 @@ def train(model_name="detector", num_epoch=50, lr=1e-3, patience=10):
             loss.backward()
             optimizer.step()
 
-            # Compute IoU
-            iou_value = (1 - loss_segmentation).item()
+            # Compute metrics
+            iou_value = iou_metric(segmentation_pred, segmentation_labels).item()
             depth_error = loss_depth.item()
 
             total_train_loss += loss.item()
             total_train_iou += iou_value
             total_train_depth_error += depth_error
 
+        # Record training metrics
         avg_train_loss = total_train_loss / len(train_loader)
         avg_train_iou = total_train_iou / len(train_loader)
         avg_train_depth_error = total_train_depth_error / len(train_loader)
+        metrics["train_iou"].append(avg_train_iou)
+        metrics["train_depth_error"].append(avg_train_depth_error)
+
         print(f"Epoch [{epoch + 1}/{num_epoch}] - Train Loss: {avg_train_loss:.4f}, Train IoU: {avg_train_iou:.4f}, Train Depth Error: {avg_train_depth_error:.4f}")
 
         # Validation
@@ -200,16 +149,26 @@ def train(model_name="detector", num_epoch=50, lr=1e-3, patience=10):
                 loss_depth = criterion_depth(depth_pred, depth_labels)
                 loss = loss_segmentation + loss_depth
 
-                iou_value = (1 - loss_segmentation).item()
+                # Check for NaN values
+                if torch.isnan(loss).any():
+                    print("NaN detected in validation loss. Stopping training.")
+                    return
+
+                # Compute metrics
+                iou_value = iou_metric(segmentation_pred, segmentation_labels).item()
                 depth_error = loss_depth.item()
 
                 total_val_loss += loss.item()
                 total_val_iou += iou_value
                 total_val_depth_error += depth_error
 
+        # Record validation metrics
         avg_val_loss = total_val_loss / len(val_loader)
         avg_val_iou = total_val_iou / len(val_loader)
         avg_val_depth_error = total_val_depth_error / len(val_loader)
+        metrics["val_iou"].append(avg_val_iou)
+        metrics["val_depth_error"].append(avg_val_depth_error)
+
         print(f"Epoch [{epoch + 1}/{num_epoch}] - Val Loss: {avg_val_loss:.4f}, Val IoU: {avg_val_iou:.4f}, Val Depth Error: {avg_val_depth_error:.4f}")
 
         # Check for improvement
@@ -223,11 +182,9 @@ def train(model_name="detector", num_epoch=50, lr=1e-3, patience=10):
                 print(f"Early stopping at epoch {epoch + 1} with best validation loss: {best_val_loss:.4f}")
                 break
 
-        scheduler.step()
+        scheduler.step(avg_val_loss)
 
-    # Visualize predictions after training
-    visualize_predictions(model, val_loader, device)
     print("Training complete!")
 
 if __name__ == "__main__":
-    train(model_name="detector", num_epoch=50, lr=1e-3, patience=10)
+    train(model_name="detector", num_epoch=50, lr=1e-3, patience=5)
