@@ -2,7 +2,6 @@ from pathlib import Path
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 
 HOMEWORK_DIR = Path(__file__).resolve().parent
 INPUT_MEAN = [0.2788, 0.2657, 0.2629]
@@ -103,74 +102,23 @@ class Detector(torch.nn.Module):
         self.register_buffer("input_std", torch.as_tensor(INPUT_STD))
 
         # TODO: implement
-        # Encoder (Down-sampling)
-        # Encoder (Down-sampling)
-        self.encoder1 = nn.Sequential(
-            nn.Conv2d(in_channels, 64, kernel_size=3, padding=1),
-            nn.BatchNorm2d(64),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(64, 64, kernel_size=3, padding=1),
-            nn.BatchNorm2d(64),
-            nn.ReLU(inplace=True),
-        )
-        self.encoder2 = nn.Sequential(
-            nn.Conv2d(64, 128, kernel_size=3, padding=1),
-            nn.BatchNorm2d(128),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(128, 128, kernel_size=3, padding=1),
-            nn.BatchNorm2d(128),
-            nn.ReLU(inplace=True),
-        )
-        self.encoder3 = nn.Sequential(
-            nn.Conv2d(128, 256, kernel_size=3, padding=1),
-            nn.BatchNorm2d(256),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(256, 256, kernel_size=3, padding=1),
-            nn.BatchNorm2d(256),
-            nn.ReLU(inplace=True),
-        )
-        self.encoder4 = nn.Sequential(
-            nn.Conv2d(256, 512, kernel_size=3, padding=1),
-            nn.BatchNorm2d(512),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(512, 512, kernel_size=3, padding=1),
-            nn.BatchNorm2d(512),
-            nn.ReLU(inplace=True),
-        )
-        self.pool = nn.MaxPool2d(2, 2)
+        # Down-sampling (Encoder) Layers
+        self.conv1 = nn.Conv2d(in_channels, 32, kernel_size=3, stride=2, padding=1)
+        self.conv2 = nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1)
+        self.conv3 = nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1)
+        self.conv4 = nn.Conv2d(128, 256, kernel_size=3, stride=2, padding=1)
 
-        # Decoder (Up-sampling) with skip connections
-        self.upconv1 = nn.ConvTranspose2d(512, 256, kernel_size=2, stride=2)
-        self.decoder1 = nn.Sequential(
-            nn.Conv2d(512, 256, kernel_size=3, padding=1),
-            nn.BatchNorm2d(256),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(256, 256, kernel_size=3, padding=1),
-            nn.BatchNorm2d(256),
-            nn.ReLU(inplace=True),
-        )
-        self.upconv2 = nn.ConvTranspose2d(256, 128, kernel_size=2, stride=2)
-        self.decoder2 = nn.Sequential(
-            nn.Conv2d(256, 128, kernel_size=3, padding=1),
-            nn.BatchNorm2d(128),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(128, 128, kernel_size=3, padding=1),
-            nn.BatchNorm2d(128),
-            nn.ReLU(inplace=True),
-        )
-        self.upconv3 = nn.ConvTranspose2d(128, 64, kernel_size=2, stride=2)
-        self.decoder3 = nn.Sequential(
-            nn.Conv2d(128, 64, kernel_size=3, padding=1),
-            nn.BatchNorm2d(64),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(64, 64, kernel_size=3, padding=1),
-            nn.BatchNorm2d(64),
-            nn.ReLU(inplace=True),
-        )
+        # Decoder (Up-sampling)
+        self.upconv1 = nn.ConvTranspose2d(256, 128, kernel_size=3, stride=2, padding=1, output_padding=1)
+        self.upconv2 = nn.ConvTranspose2d(128, 64, kernel_size=3, stride=2, padding=1, output_padding=1)
+        self.upconv3 = nn.ConvTranspose2d(64, 32, kernel_size=3, stride=2, padding=1, output_padding=1)
+        self.upconv4 = nn.ConvTranspose2d(32, 16, kernel_size=3, stride=2, padding=1, output_padding=1)
 
-        # Segmentation and Depth Heads
-        self.segmentation_conv = nn.Conv2d(64, num_classes, kernel_size=1)
-        self.depth_conv = nn.Conv2d(64, 1, kernel_size=1)
+        # Segmentation Head
+        self.segmentation_conv = nn.Conv2d(16, num_classes, kernel_size=1)
+
+        # Depth Head
+        self.depth_conv = nn.Conv2d(16, 1, kernel_size=1)
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """
@@ -189,27 +137,22 @@ class Detector(torch.nn.Module):
         z = (x - self.input_mean[None, :, None, None]) / self.input_std[None, :, None, None]
 
         # TODO: replace with actual forward pass
-        # Encoder: down-sampling the spatial dimensions
-        # Encoder
-        e1 = self.encoder1(x)
-        e2 = self.encoder2(self.pool(e1))
-        e3 = self.encoder3(self.pool(e2))
-        e4 = self.encoder4(self.pool(e3))
+         # Encoder: down-sampling the spatial dimensions
+        x1 = torch.relu(self.conv1(z))
+        x2 = torch.relu(self.conv2(x1))
+        x3 = torch.relu(self.conv3(x2))
+        x4 = torch.relu(self.conv4(x3))
 
-        # Decoder with skip connections
-        d1 = self.decoder1(torch.cat([self.upconv1(e4), e3], dim=1))
-        d2 = self.decoder2(torch.cat([self.upconv2(d1), e2], dim=1))
-        d3 = self.decoder3(torch.cat([self.upconv3(d2), e1], dim=1))
+        # Decoder: up-sampling to recover the original spatial dimensions
+        x = torch.relu(self.upconv1(x4))
+        x = torch.relu(self.upconv2(x))
+        x = torch.relu(self.upconv3(x))
+        x = torch.relu(self.upconv4(x))
 
-        # Segmentation and Depth Heads
-        segmentation_logits = self.segmentation_conv(d3)
-        raw_depth = self.depth_conv(d3)
+        logits = self.segmentation_conv(x)
+        raw_depth = self.depth_conv(x)
 
-        # Resize to match target dimensions
-        segmentation_logits = F.interpolate(segmentation_logits, size=(96, 128), mode='bilinear', align_corners=False)
-        raw_depth = F.interpolate(raw_depth, size=(96, 128), mode='bilinear', align_corners=False)
-
-        return segmentation_logits, raw_depth
+        return logits, raw_depth
 
     def predict(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """
