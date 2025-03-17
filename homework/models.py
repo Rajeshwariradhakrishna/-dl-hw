@@ -2,6 +2,7 @@ from pathlib import Path
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 HOMEWORK_DIR = Path(__file__).resolve().parent
 INPUT_MEAN = [0.2788, 0.2657, 0.2629]
@@ -102,20 +103,20 @@ class Detector(torch.nn.Module):
         self.register_buffer("input_std", torch.as_tensor(INPUT_STD))
 
         # TODO: implement
-        # Down-sampling (Encoder) Layers
+        # Encoder (Down-sampling)
         self.encoder1 = self._block(in_channels, 64)
         self.encoder2 = self._block(64, 128)
         self.encoder3 = self._block(128, 256)
         self.encoder4 = self._block(256, 512)
         self.pool = nn.MaxPool2d(2, 2)
 
-        # Decoder with skip connections
+        # Decoder (Up-sampling) with skip connections
         self.upconv1 = nn.ConvTranspose2d(512, 256, kernel_size=2, stride=2)
-        self.decoder1 = self._block(512, 256)
+        self.decoder1 = self._block(512, 256)  # Skip connection from encoder3
         self.upconv2 = nn.ConvTranspose2d(256, 128, kernel_size=2, stride=2)
-        self.decoder2 = self._block(256, 128)
+        self.decoder2 = self._block(256, 128)  # Skip connection from encoder2
         self.upconv3 = nn.ConvTranspose2d(128, 64, kernel_size=2, stride=2)
-        self.decoder3 = self._block(128, 64)
+        self.decoder3 = self._block(128, 64)  # Skip connection from encoder1
 
         # Segmentation and Depth Heads
         self.segmentation_conv = nn.Conv2d(64, num_classes, kernel_size=1)
@@ -129,7 +130,7 @@ class Detector(torch.nn.Module):
                 nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1),
                 nn.BatchNorm2d(out_channels),
                 nn.ReLU(inplace=True),
-        )
+            )
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """
