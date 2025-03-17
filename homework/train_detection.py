@@ -19,29 +19,37 @@ def save_model(model, model_name, log_dir):
     torch.save(model.state_dict(), model_path)
     print(f"Model saved to {model_path}")
 
-
-# Custom Focal Loss for Segmentation
-class FocalLoss(nn.Module):
-    def __init__(self, alpha=0.25, gamma=2.0, smooth=1e-6):
-        super(FocalLoss, self).__init__()
-        self.alpha = alpha
-        self.gamma = gamma
+# Custom IoU Loss for Segmentation
+class IoULoss(nn.Module):
+    def __init__(self, smooth=1e-6):
+        super(IoULoss, self).__init__()
         self.smooth = smooth
 
     def forward(self, preds, targets):
         preds = torch.sigmoid(preds)  # Convert logits to probabilities
-        # Ensure targets have the same shape as preds
-        if preds.shape[1] != targets.shape[1]:  
-            targets = torch.nn.functional.one_hot(targets.long(), num_classes=preds.shape[1])
-            targets = targets.permute(0, 3, 1, 2).float()  # Convert to (B, C, H, W)
 
+        # Threshold predictions to binary values
+        preds = preds > 0.5
+        intersection = (preds * targets).sum(dim=(2, 3))  # Sum over H and W dimensions
+        union = preds.sum(dim=(2, 3)) + targets.sum(dim=(2, 3)) - intersection
+        
+        iou = (intersection + self.smooth) / (union + self.smooth)
+        return 1 - iou.mean()  # We want to minimize this loss
+
+# Custom IoU Metric for Segmentation
+class IoUMetric(nn.Module):
+    def __init__(self, smooth=1e-6):
+        super(IoUMetric, self).__init__()
+        self.smooth = smooth
+
+    def forward(self, preds, targets):
+        preds = torch.sigmoid(preds)  # Convert logits to probabilities
+        preds = preds > 0.5  # Threshold to binary
         intersection = (preds * targets).sum(dim=(2, 3))
-        union = (preds + targets).sum(dim=(2, 3))
-        iou = (intersection + self.smooth) / (union - intersection + self.smooth)
+        union = preds.sum(dim=(2, 3)) + targets.sum(dim=(2, 3)) - intersection
 
-        # Focal Loss
-        focal_loss = self.alpha * (1 - iou) ** self.gamma * (1 - iou)  # Focal factor
-        return focal_loss.mean()
+        iou = (intersection + self.smooth) / (union + self.smooth)
+        return iou.mean()
 
 
 def train(model_name="detector", num_epoch=10, lr=1e-3, patience=5):
@@ -56,7 +64,7 @@ def train(model_name="detector", num_epoch=10, lr=1e-3, patience=5):
     model.train()
 
     # Define loss functions
-    criterion_segmentation = FocalLoss()  # Updated loss function
+    criterion_segmentation = IoULoss()  # Updated to IoU loss
     criterion_depth = nn.L1Loss()
 
     # Define optimizer
@@ -65,12 +73,16 @@ def train(model_name="detector", num_epoch=10, lr=1e-3, patience=5):
     # Learning rate scheduler (Reduce LR on plateau)
     scheduler = ReduceLROnPlateau(optimizer, 'min', patience=patience, factor=0.5, verbose=True)
 
+    # IoU Metric for tracking during training and validation
+    iou_metric = IoUMetric()
+
     # Training loop with early stopping
     best_val_loss = float('inf')
     epochs_no_improve = 0
 
     for epoch in range(num_epoch):
         total_train_loss = 0
+        total_train_iou = 0
 
         # Training loop
         model.train()
@@ -91,13 +103,16 @@ def train(model_name="detector", num_epoch=10, lr=1e-3, patience=5):
             optimizer.step()
 
             total_train_loss += loss.item()
+            total_train_iou += iou_metric(segmentation_pred, segmentation_labels).item()
 
         avg_train_loss = total_train_loss / len(train_loader)
-        print(f"Epoch [{epoch + 1}/{num_epoch}], Train Loss: {avg_train_loss:.4f}")
+        avg_train_iou = total_train_iou / len(train_loader)
+        print(f"Epoch [{epoch + 1}/{num_epoch}], Train Loss: {avg_train_loss:.4f}, Train IoU: {avg_train_iou:.4f}")
 
         # Validation loop
         model.eval()
         total_val_loss = 0
+        total_val_iou = 0
         with torch.no_grad():
             for batch in val_loader:
                 images = batch['image'].to(device)
@@ -112,9 +127,11 @@ def train(model_name="detector", num_epoch=10, lr=1e-3, patience=5):
                 loss = loss_segmentation + loss_depth
 
                 total_val_loss += loss.item()
+                total_val_iou += iou_metric(segmentation_pred, segmentation_labels).item()
 
         avg_val_loss = total_val_loss / len(val_loader)
-        print(f"Epoch [{epoch + 1}/{num_epoch}], Validation Loss: {avg_val_loss:.4f}")
+        avg_val_iou = total_val_iou / len(val_loader)
+        print(f"Epoch [{epoch + 1}/{num_epoch}], Validation Loss: {avg_val_loss:.4f}, Validation IoU: {avg_val_iou:.4f}")
 
         # Early stopping logic
         if avg_val_loss < best_val_loss:
