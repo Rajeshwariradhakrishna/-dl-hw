@@ -1,94 +1,151 @@
 import torch
-import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import DataLoader
-from torchvision import transforms, datasets
-from models import Detector, save_model, load_model
+import torch.nn as nn
 import os
+from torchvision import transforms
+from homework.datasets.drive_dataset import load_data
+from models import Detector, HOMEWORK_DIR
 
-# Function to load dataset
-def load_data(data_dir, batch_size=8, shuffle=True):
-    """
-    Load dataset from the specified directory.
+# Define log_dir where you want to save the model
+log_dir = str(HOMEWORK_DIR)
+os.makedirs(log_dir, exist_ok=True)  # Create the directory if it doesn't exist
 
-    Args:
-        data_dir: Path to the dataset directory.
-        batch_size: Batch size for the DataLoader.
-        shuffle: Whether to shuffle the dataset.
+# Define the save_model function
+def save_model(model, model_name, log_dir):
+    """Save the model's state_dict to the specified directory."""
+    model_path = os.path.join(log_dir, f"{model_name}.th")
+    torch.save(model.state_dict(), model_path)
+    print(f"Model saved to {model_path}")
 
-    Returns:
-        DataLoader for the dataset.
-    """
-    # Define transformations
-    transform = transforms.Compose([
-        transforms.Resize((96, 128)),  # Match the input size expected by the model
-        transforms.RandomHorizontalFlip(),  # Data augmentation
-        transforms.ToTensor(),
-    ])
+# Custom Dice Loss to avoid shape mismatch
+class DiceLoss(nn.Module):
+    def __init__(self, smooth=1e-6):
+        super(DiceLoss, self).__init__()
+        self.smooth = smooth
 
-    # Check if the data directory exists
-    if not os.path.exists(data_dir):
-        raise FileNotFoundError(f"The directory '{data_dir}' does not exist. Please create it and add your dataset.")
+    def forward(self, preds, targets):
+        preds = torch.sigmoid(preds)  # Convert logits to probabilities
 
-    # Load dataset (assume images are in subfolders for classes)
-    dataset = datasets.ImageFolder(data_dir, transform=transform)
-    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=shuffle)
+        # Ensure targets have the same shape as preds
+        if preds.shape[1] != targets.shape[1]:
+            targets = torch.nn.functional.one_hot(targets.long(), num_classes=preds.shape[1])
+            targets = targets.permute(0, 3, 1, 2).float()  # Convert to (B, C, H, W)
 
-    return dataloader
+        intersection = (preds * targets).sum(dim=(2, 3))
+        denominator = (preds + targets).sum(dim=(2, 3))
 
-# Training Function
-def train(model_name: str = "detector", num_epoch: int = 10, lr: float = 0.001):
-    """
-    Train the model.
+        dice_score = (2.0 * intersection + self.smooth) / (denominator + self.smooth)
+        return 1 - dice_score.mean()
 
-    Args:
-        model_name: Name of the model to train (default: "detector").
-        num_epoch: Number of training epochs (default: 10).
-        lr: Learning rate for the optimizer (default: 0.001).
-    """
-    # Initialize model, loss functions, and optimizer
+# Combined Loss (Dice Loss + Cross-Entropy Loss)
+class CombinedLoss(nn.Module):
+    def __init__(self, smooth=1e-6):
+        super(CombinedLoss, self).__init__()
+        self.dice_loss = DiceLoss(smooth)
+        self.ce_loss = nn.CrossEntropyLoss()
+
+    def forward(self, preds, targets):
+        dice_loss = self.dice_loss(preds, targets)
+        ce_loss = self.ce_loss(preds, targets)
+        return dice_loss + ce_loss
+
+# IoU Metric
+def calculate_iou(preds, targets):
+    preds = torch.argmax(preds, dim=1)  # Convert logits to class labels
+    intersection = (preds & targets).float().sum((1, 2))  # Intersection
+    union = (preds | targets).float().sum((1, 2))  # Union
+    iou = (intersection + 1e-6) / (union + 1e-6)  # Avoid division by zero
+    return iou.mean()
+
+# Data Augmentation
+train_transform = transforms.Compose([
+    transforms.RandomHorizontalFlip(),
+    transforms.RandomVerticalFlip(),
+    transforms.RandomRotation(30),
+    transforms.ToTensor(),
+])
+
+val_transform = transforms.Compose([
+    transforms.ToTensor(),
+])
+
+def train(model_name="detector", num_epoch=10, lr=1e-3):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    
-    # Load the model based on the model_name argument
-    if model_name == "detector":
-        model = Detector().to(device)
-    else:
-        raise ValueError(f"Unsupported model name: {model_name}")
 
-    criterion_seg = nn.CrossEntropyLoss()  # For segmentation
-    criterion_depth = nn.MSELoss()  # For depth estimation
-    optimizer = optim.Adam(model.parameters(), lr=lr)  # Use lr argument
-    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.1)  # Learning rate scheduler
+    # Load dataset with data augmentation
+    train_loader = load_data("drive_data/train", transform=train_transform)
+    val_loader = load_data("drive_data/val", transform=val_transform)
 
-    # Load datasets
-    train_loader = load_data("drive_data/train")  # Load training data
-    val_loader = load_data("drive_data/val", shuffle=False)  # Load validation data (no shuffling)
+    # Initialize model
+    model = Detector().to(device)
+    model.train()
 
-    # Training loop
-    for epoch in range(num_epoch):  # Use num_epoch argument
+    # Define loss functions
+    criterion_segmentation = CombinedLoss()
+    criterion_depth = nn.L1Loss()
+
+    # Define optimizer
+    optimizer = optim.Adam(model.parameters(), lr=lr)
+
+    for epoch in range(num_epoch):
+        total_train_loss = 0
+
+        # Training loop
         model.train()
-        for imgs, labels in train_loader:
-            imgs, labels = imgs.to(device), labels.to(device)
+        for batch in train_loader:
+            images = batch['image'].to(device)
+            segmentation_labels = batch['track'].to(device).long()
+            depth_labels = batch['depth'].to(device).unsqueeze(1)  # Fix shape
 
             optimizer.zero_grad()
-            segmentation_logits, raw_depth = model(imgs)
+            segmentation_pred, depth_pred = model(images)
 
-            # Compute losses (assume labels contain both segmentation and depth)
-            loss_seg = criterion_seg(segmentation_logits, labels['segmentation'])
-            loss_depth = criterion_depth(raw_depth.squeeze(1), labels['depth'])
-            total_loss = loss_seg + loss_depth
+            # Compute loss
+            loss_segmentation = criterion_segmentation(segmentation_pred, segmentation_labels)
+            loss_depth = criterion_depth(depth_pred, depth_labels)
+            loss = loss_segmentation + loss_depth
 
-            # Backpropagation
-            total_loss.backward()
+            loss.backward()
             optimizer.step()
 
-        scheduler.step()
-        print(f"Epoch [{epoch+1}/{num_epoch}], Loss: {total_loss.item():.4f}")
+            total_train_loss += loss.item()
 
-    # Save the model
-    save_model(model)
-    print(f"Model saved as {model_name}.th")
+        avg_train_loss = total_train_loss / len(train_loader)
+        print(f"Epoch {epoch+1}: Train Loss = {avg_train_loss:.4f}")
 
+        # Validation loop
+        model.eval()
+        total_val_loss = 0
+        total_iou = 0
+        with torch.no_grad():
+            for batch in val_loader:
+                images = batch['image'].to(device)
+                segmentation_labels = batch['track'].to(device).long()
+                depth_labels = batch['depth'].to(device).unsqueeze(1)
 
-if __name__ == "__main__":
-    train()  # Default arguments will be used
+                segmentation_pred, depth_pred = model(images)
+
+                # Compute validation loss
+                loss_segmentation = criterion_segmentation(segmentation_pred, segmentation_labels)
+                loss_depth = criterion_depth(depth_pred, depth_labels)
+                loss = loss_segmentation + loss_depth
+
+                total_val_loss += loss.item()
+
+                # Compute IoU
+                iou = calculate_iou(segmentation_pred, segmentation_labels)
+                total_iou += iou.item()
+
+        avg_val_loss = total_val_loss / len(val_loader)
+        avg_iou = total_iou / len(val_loader)
+        print(f"Epoch {epoch+1}: Validation Loss = {avg_val_loss:.4f}, IoU = {avg_iou:.4f}")
+
+    # Save the trained model using the defined save_model function
+    save_model(model, model_name, log_dir)
+
+# Run training
+train(
+    model_name="detector",
+    num_epoch=10,
+    lr=1e-3,
+)

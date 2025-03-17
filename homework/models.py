@@ -104,33 +104,73 @@ class Detector(torch.nn.Module):
 
         # TODO: implement
         # Encoder (Down-sampling)
-        self.encoder1 = self._block(in_channels, 64)
-        self.encoder2 = self._block(64, 128)
-        self.encoder3 = self._block(128, 256)
-        self.encoder4 = self._block(256, 512)
+        # Encoder (Down-sampling)
+        self.encoder1 = nn.Sequential(
+            nn.Conv2d(in_channels, 64, kernel_size=3, padding=1),
+            nn.BatchNorm2d(64),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(64, 64, kernel_size=3, padding=1),
+            nn.BatchNorm2d(64),
+            nn.ReLU(inplace=True),
+        )
+        self.encoder2 = nn.Sequential(
+            nn.Conv2d(64, 128, kernel_size=3, padding=1),
+            nn.BatchNorm2d(128),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(128, 128, kernel_size=3, padding=1),
+            nn.BatchNorm2d(128),
+            nn.ReLU(inplace=True),
+        )
+        self.encoder3 = nn.Sequential(
+            nn.Conv2d(128, 256, kernel_size=3, padding=1),
+            nn.BatchNorm2d(256),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(256, 256, kernel_size=3, padding=1),
+            nn.BatchNorm2d(256),
+            nn.ReLU(inplace=True),
+        )
+        self.encoder4 = nn.Sequential(
+            nn.Conv2d(256, 512, kernel_size=3, padding=1),
+            nn.BatchNorm2d(512),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(512, 512, kernel_size=3, padding=1),
+            nn.BatchNorm2d(512),
+            nn.ReLU(inplace=True),
+        )
         self.pool = nn.MaxPool2d(2, 2)
 
         # Decoder (Up-sampling) with skip connections
         self.upconv1 = nn.ConvTranspose2d(512, 256, kernel_size=2, stride=2)
-        self.decoder1 = self._block(512, 256)  # Skip connection from encoder3
+        self.decoder1 = nn.Sequential(
+            nn.Conv2d(512, 256, kernel_size=3, padding=1),
+            nn.BatchNorm2d(256),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(256, 256, kernel_size=3, padding=1),
+            nn.BatchNorm2d(256),
+            nn.ReLU(inplace=True),
+        )
         self.upconv2 = nn.ConvTranspose2d(256, 128, kernel_size=2, stride=2)
-        self.decoder2 = self._block(256, 128)  # Skip connection from encoder2
+        self.decoder2 = nn.Sequential(
+            nn.Conv2d(256, 128, kernel_size=3, padding=1),
+            nn.BatchNorm2d(128),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(128, 128, kernel_size=3, padding=1),
+            nn.BatchNorm2d(128),
+            nn.ReLU(inplace=True),
+        )
         self.upconv3 = nn.ConvTranspose2d(128, 64, kernel_size=2, stride=2)
-        self.decoder3 = self._block(128, 64)  # Skip connection from encoder1
+        self.decoder3 = nn.Sequential(
+            nn.Conv2d(128, 64, kernel_size=3, padding=1),
+            nn.BatchNorm2d(64),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(64, 64, kernel_size=3, padding=1),
+            nn.BatchNorm2d(64),
+            nn.ReLU(inplace=True),
+        )
 
         # Segmentation and Depth Heads
         self.segmentation_conv = nn.Conv2d(64, num_classes, kernel_size=1)
         self.depth_conv = nn.Conv2d(64, 1, kernel_size=1)
-
-        def _block(self, in_channels, out_channels):
-            return nn.Sequential(
-                nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1),
-                nn.BatchNorm2d(out_channels),
-                nn.ReLU(inplace=True),
-                nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1),
-                nn.BatchNorm2d(out_channels),
-                nn.ReLU(inplace=True),
-            )
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """
