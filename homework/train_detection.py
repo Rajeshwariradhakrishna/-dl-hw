@@ -16,23 +16,28 @@ def save_model(model, model_name, log_dir):
     torch.save(model.state_dict(), model_path)
     print(f"Model saved to {model_path}")
 
-# Dice Loss for Segmentation
-class DiceLoss(nn.Module):
-    def __init__(self, smooth=1e-6):
-        super(DiceLoss, self).__init__()
-        self.smooth = smooth
+# Focal Loss for Segmentation
+class FocalLoss(nn.Module):
+    def __init__(self, alpha=0.25, gamma=2.0, reduction='mean'):
+        super(FocalLoss, self).__init__()
+        self.alpha = alpha
+        self.gamma = gamma
+        self.reduction = reduction
 
     def forward(self, preds, targets):
-        preds = torch.softmax(preds, dim=1)  # Convert logits to probabilities
-        targets_one_hot = torch.nn.functional.one_hot(targets, num_classes=preds.shape[1]).permute(0, 3, 1, 2).float()
-        intersection = (preds * targets_one_hot).sum(dim=(2, 3))
-        union = preds.sum(dim=(2, 3)) + targets_one_hot.sum(dim=(2, 3))
-        dice = (2 * intersection + self.smooth) / (union + self.smooth)
-        return 1 - dice.mean()
+        ce_loss = nn.CrossEntropyLoss(reduction='none')(preds, targets)
+        pt = torch.exp(-ce_loss)
+        focal_loss = self.alpha * (1 - pt) ** self.gamma * ce_loss
+
+        if self.reduction == 'mean':
+            return focal_loss.mean()
+        elif self.reduction == 'sum':
+            return focal_loss.sum()
+        return focal_loss
 
 # Combined Depth Loss (L1 + MSE)
 class CombinedDepthLoss(nn.Module):
-    def __init__(self, l1_weight=1.0, mse_weight=1.0):
+    def __init__(self, l1_weight=0.7, mse_weight=0.3):
         super(CombinedDepthLoss, self).__init__()
         self.l1_loss = nn.L1Loss()
         self.mse_loss = nn.MSELoss()
@@ -71,8 +76,8 @@ def train(model_name="detector", num_epoch=50, lr=1e-3, patience=5):
     model = Detector().to(device)
 
     # Loss functions
-    criterion_segmentation = DiceLoss()  # Use Dice Loss for segmentation
-    criterion_depth = CombinedDepthLoss(l1_weight=1.0, mse_weight=1.0)  # Combine L1 and MSE Loss for depth
+    criterion_segmentation = FocalLoss(alpha=0.25, gamma=2.0)  # Use Focal Loss for segmentation
+    criterion_depth = CombinedDepthLoss(l1_weight=0.7, mse_weight=0.3)  # Combine L1 and MSE Loss for depth
 
     # Optimizer
     optimizer = optim.Adam(model.parameters(), lr=lr)
