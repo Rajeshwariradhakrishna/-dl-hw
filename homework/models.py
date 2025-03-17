@@ -102,7 +102,7 @@ class Detector(torch.nn.Module):
         self.register_buffer("input_std", torch.as_tensor(INPUT_STD))
 
         # TODO: implement
-           # Encoder
+        # Encoder
         self.encoder1 = self._conv_block(in_channels, 64)
         self.encoder2 = self._conv_block(64, 128)
         self.encoder3 = self._conv_block(128, 256)
@@ -114,12 +114,18 @@ class Detector(torch.nn.Module):
         self.decoder3 = self._upconv_block(128, 64)
         self.decoder4 = self._upconv_block(64, 32)
 
-        # Segmentation Head
-        self.segmentation_conv = nn.Conv2d(32, num_classes, kernel_size=1)
+        # Improved Segmentation Head
+        self.segmentation_head = nn.Sequential(
+            nn.Conv2d(32, 64, kernel_size=3, padding=1),
+            nn.BatchNorm2d(64),
+            nn.ReLU(),
+            nn.Dropout(0.2),
+            nn.Conv2d(64, num_classes, kernel_size=1),
+        )
 
         # Depth Head
         self.depth_conv = nn.Conv2d(32, 1, kernel_size=1)
-    
+
     def _conv_block(self, in_channels, out_channels):
         return nn.Sequential(
             nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1),
@@ -166,7 +172,7 @@ class Detector(torch.nn.Module):
         d4 = self.decoder4(d3)
 
         # Segmentation and Depth Heads
-        logits = self.segmentation_conv(d4)
+        logits = self.segmentation_head(d4)
         raw_depth = self.depth_conv(d4)
 
         return logits, raw_depth
