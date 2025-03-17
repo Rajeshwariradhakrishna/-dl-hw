@@ -76,8 +76,8 @@ def train(model_name="detector", num_epoch=100, lr=1e-3, patience=10):
     ])
 
     # Load dataset with augmentations
-    train_loader = load_data("drive_data/train", transform=train_transform)
-    val_loader = load_data("drive_data/val", transform=val_transform)
+    train_loader = load_data("drive_data/train")
+    val_loader = load_data("drive_data/val")
 
     # Initialize model
     model = Detector().to(device)
