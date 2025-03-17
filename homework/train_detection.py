@@ -3,10 +3,10 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
 from torchvision import transforms, datasets
-from models import Detector, save_model
+from models import Detector, save_model, load_model
 
 # Training Function
-def train():
+def train(model_name: str = "detector", num_epoch: int = 10):
     # Define transformations
     transform = transforms.Compose([
         transforms.Resize((96, 128)),  # Match the input size expected by the model
@@ -20,15 +20,20 @@ def train():
 
     # Initialize model, loss functions, and optimizer
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = Detector().to(device)
+    
+    # Load the model based on the model_name argument
+    if model_name == "detector":
+        model = Detector().to(device)
+    else:
+        raise ValueError(f"Unsupported model name: {model_name}")
+
     criterion_seg = nn.CrossEntropyLoss()  # For segmentation
     criterion_depth = nn.MSELoss()  # For depth estimation
     optimizer = optim.Adam(model.parameters(), lr=0.001)
     scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.1)  # Learning rate scheduler
 
     # Training loop
-    num_epochs = 50  # Increase epochs
-    for epoch in range(num_epochs):
+    for epoch in range(num_epoch):  # Use num_epoch argument
         model.train()
         for imgs, labels in dataloader:
             imgs, labels = imgs.to(device), labels.to(device)
@@ -46,12 +51,12 @@ def train():
             optimizer.step()
 
         scheduler.step()
-        print(f"Epoch [{epoch+1}/{num_epochs}], Loss: {total_loss.item():.4f}")
+        print(f"Epoch [{epoch+1}/{num_epoch}], Loss: {total_loss.item():.4f}")
 
     # Save the model
     save_model(model)
-    print("Model saved as detector.th")
+    print(f"Model saved as {model_name}.th")
 
 
 if __name__ == "__main__":
-    train()
+    train()  # Default arguments will be used
