@@ -2,9 +2,11 @@ import torch
 import torch.optim as optim
 import torch.nn as nn
 import os
+import numpy as np
+import matplotlib.pyplot as plt
 from torchvision import transforms
 from homework.datasets.drive_dataset import load_data
-from models import Detector, HOMEWORK_DIR
+from models import HOMEWORK_DIR
 from torch.optim.lr_scheduler import CosineAnnealingLR
 
 # Define log directory
@@ -17,19 +19,19 @@ def save_model(model, model_name, log_dir):
     torch.save(model.state_dict(), model_path)
     print(f"Model saved to {model_path}")
 
-# Dice Loss for Segmentation
-class DiceLoss(nn.Module):
+# IoU Loss for Segmentation
+class IoULoss(nn.Module):
     def __init__(self, smooth=1e-6):
-        super(DiceLoss, self).__init__()
+        super(IoULoss, self).__init__()
         self.smooth = smooth
 
     def forward(self, preds, targets):
         preds = torch.softmax(preds, dim=1)
         targets_one_hot = torch.nn.functional.one_hot(targets, num_classes=preds.shape[1]).permute(0, 3, 1, 2).float()
         intersection = (preds * targets_one_hot).sum(dim=(2, 3))
-        union = preds.sum(dim=(2, 3)) + targets_one_hot.sum(dim=(2, 3))
-        dice = (2 * intersection + self.smooth) / (union + self.smooth)
-        return 1 - dice.mean()
+        union = preds.sum(dim=(2, 3)) + targets_one_hot.sum(dim=(2, 3)) - intersection
+        iou = (intersection + self.smooth) / (union + self.smooth)
+        return 1 - iou.mean()
 
 # Combined Depth Loss (L1 + MSE)
 class CombinedDepthLoss(nn.Module):
@@ -45,30 +47,82 @@ class CombinedDepthLoss(nn.Module):
         mse_loss = self.mse_loss(preds, targets)
         return self.l1_weight * l1_loss + self.mse_weight * mse_loss
 
-# IoU Metric for Segmentation
-class IoUMetric(nn.Module):
-    def __init__(self, num_classes, smooth=1e-6):
-        super(IoUMetric, self).__init__()
-        self.smooth = smooth
-        self.num_classes = num_classes
+# U-Net Model for Segmentation
+class UNet(nn.Module):
+    def __init__(self, in_channels=3, out_channels=3):
+        super(UNet, self).__init__()
+        # Define U-Net architecture here (encoder-decoder with skip connections)
+        # Example implementation:
+        self.encoder = nn.Sequential(
+            nn.Conv2d(in_channels, 64, kernel_size=3, padding=1),
+            nn.ReLU(),
+            nn.Conv2d(64, 64, kernel_size=3, padding=1),
+            nn.ReLU(),
+            nn.MaxPool2d(kernel_size=2, stride=2)
+        )
+        self.decoder = nn.Sequential(
+            nn.Conv2d(64, 64, kernel_size=3, padding=1),
+            nn.ReLU(),
+            nn.Conv2d(64, out_channels, kernel_size=3, padding=1),
+            nn.ReLU(),
+            nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
+        )
 
-    def forward(self, preds, targets):
-        preds = torch.argmax(preds, dim=1)  # Convert logits to class indices
-        preds_one_hot = torch.nn.functional.one_hot(preds, num_classes=self.num_classes).permute(0, 3, 1, 2).float()
-        targets_one_hot = torch.nn.functional.one_hot(targets, num_classes=self.num_classes).permute(0, 3, 1, 2).float()
-        intersection = (preds_one_hot * targets_one_hot).sum(dim=(2, 3))
-        union = preds_one_hot.sum(dim=(2, 3)) + targets_one_hot.sum(dim=(2, 3)) - intersection
-        iou = (intersection + self.smooth) / (union + self.smooth)
-        return iou.mean()
+    def forward(self, x):
+        x = self.encoder(x)
+        x = self.decoder(x)
+        return x
 
-def train(model_name="detector", num_epoch=100, lr=1e-3, patience=10):
+# Detector Model with U-Net for Segmentation
+class Detector(nn.Module):
+    def __init__(self):
+        super(Detector, self).__init__()
+        self.segmentation_model = UNet(in_channels=3, out_channels=3)  # 3 classes
+        self.depth_model = nn.Sequential(
+            nn.Conv2d(3, 64, kernel_size=3, padding=1),
+            nn.ReLU(),
+            nn.Conv2d(64, 1, kernel_size=1)
+        )
+
+    def forward(self, x):
+        segmentation = self.segmentation_model(x)
+        depth = self.depth_model(x)
+        return segmentation, depth
+
+# Visualize Predictions
+def visualize_predictions(model, val_loader, device):
+    model.eval()
+    with torch.no_grad():
+        for batch in val_loader:
+            images = batch['image'].to(device)
+            segmentation_labels = batch['track'].to(device).long()
+            segmentation_pred, _ = model(images)
+            segmentation_pred = torch.argmax(segmentation_pred, dim=1)
+
+            # Plot images, ground truth, and predictions
+            plt.figure(figsize=(10, 5))
+            plt.subplot(1, 3, 1)
+            plt.imshow(images[0].cpu().permute(1, 2, 0))
+            plt.title("Image")
+            plt.subplot(1, 3, 2)
+            plt.imshow(segmentation_labels[0].cpu(), cmap="jet")
+            plt.title("Ground Truth")
+            plt.subplot(1, 3, 3)
+            plt.imshow(segmentation_pred[0].cpu(), cmap="jet")
+            plt.title("Prediction")
+            plt.show()
+            break
+
+# Training Function
+def train(model_name="detector", num_epoch=50, lr=1e-3, patience=10):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # Data Augmentation
     train_transform = transforms.Compose([
         transforms.RandomHorizontalFlip(),
-        transforms.RandomRotation(10),
-        transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2),
+        transforms.RandomRotation(20),
+        transforms.RandomResizedCrop((256, 256), scale=(0.8, 1.0)),
+        transforms.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.3),
         transforms.ToTensor(),
     ])
     val_transform = transforms.Compose([
@@ -76,22 +130,19 @@ def train(model_name="detector", num_epoch=100, lr=1e-3, patience=10):
     ])
 
     # Load dataset with augmentations
-    train_loader = load_data("drive_data/train")
-    val_loader = load_data("drive_data/val")
+    train_loader = load_data("drive_data/train", transform=train_transform)
+    val_loader = load_data("drive_data/val", transform=val_transform)
 
     # Initialize model
     model = Detector().to(device)
 
     # Loss functions
-    criterion_segmentation = DiceLoss()  # Use Dice Loss for segmentation
+    criterion_segmentation = IoULoss()  # Use IoU Loss for segmentation
     criterion_depth = CombinedDepthLoss(l1_weight=0.8, mse_weight=0.2)
 
     # Optimizer with weight decay
-    optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=1e-4)
+    optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
     scheduler = CosineAnnealingLR(optimizer, T_max=num_epoch, eta_min=1e-5)
-
-    # Metrics
-    iou_metric = IoUMetric(num_classes=3)
 
     # Training loop
     best_val_loss = float('inf')
@@ -120,7 +171,8 @@ def train(model_name="detector", num_epoch=100, lr=1e-3, patience=10):
             loss.backward()
             optimizer.step()
 
-            iou_value = iou_metric(segmentation_pred, segmentation_labels).item()
+            # Compute IoU
+            iou_value = (1 - loss_segmentation).item()
             depth_error = loss_depth.item()
 
             total_train_loss += loss.item()
@@ -148,11 +200,7 @@ def train(model_name="detector", num_epoch=100, lr=1e-3, patience=10):
                 loss_depth = criterion_depth(depth_pred, depth_labels)
                 loss = loss_segmentation + loss_depth
 
-                if torch.isnan(loss).any():
-                    print("NaN detected in validation loss. Stopping training.")
-                    return
-
-                iou_value = iou_metric(segmentation_pred, segmentation_labels).item()
+                iou_value = (1 - loss_segmentation).item()
                 depth_error = loss_depth.item()
 
                 total_val_loss += loss.item()
@@ -177,7 +225,9 @@ def train(model_name="detector", num_epoch=100, lr=1e-3, patience=10):
 
         scheduler.step()
 
+    # Visualize predictions after training
+    visualize_predictions(model, val_loader, device)
     print("Training complete!")
 
 if __name__ == "__main__":
-    train(model_name="detector", num_epoch=100, lr=1e-3, patience=10)
+    train(model_name="detector", num_epoch=50, lr=1e-3, patience=10)
