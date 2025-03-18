@@ -72,7 +72,7 @@ def visualize_predictions(model, val_loader, device):
             break
 
 # Training Function
-def train(model_name="detector", num_epoch=50, lr=1e-3, patience=10):
+def train(model_name="detector", num_epoch=100, lr=1e-3, patience=10):  # Increased num_epoch to 100
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # Data Augmentation
@@ -188,4 +188,4 @@ def train(model_name="detector", num_epoch=50, lr=1e-3, patience=10):
     print("Training complete!")
 
 if __name__ == "__main__":
-    train(model_name="detector", num_epoch=50, lr=1e-3, patience=10)
+    train(model_name="detector", num_epoch=100, lr=1e-3, patience=10)  # Increased num_epoch to 100
