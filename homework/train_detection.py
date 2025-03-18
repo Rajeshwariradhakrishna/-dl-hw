@@ -7,14 +7,13 @@ import matplotlib.pyplot as plt
 from torchvision import transforms
 from homework.datasets.drive_dataset import load_data
 from models import Detector, HOMEWORK_DIR
-from torch.optim.lr_scheduler import CosineAnnealingLR
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 
 # Define log directory
 log_dir = str(HOMEWORK_DIR)
 os.makedirs(log_dir, exist_ok=True)
 
 def save_model(model, model_name, log_dir):
-    """Save the model's state_dict to the specified directory."""
     model_path = os.path.join(log_dir, f"{model_name}.th")
     torch.save(model.state_dict(), model_path)
     print(f"Model saved to {model_path}")
@@ -31,7 +30,6 @@ class FocalLoss(nn.Module):
         ce_loss = nn.CrossEntropyLoss(reduction='none')(preds, targets)
         pt = torch.exp(-ce_loss)
         focal_loss = self.alpha * (1 - pt) ** self.gamma * ce_loss
-
         if self.reduction == 'mean':
             return focal_loss.mean()
         elif self.reduction == 'sum':
@@ -54,7 +52,7 @@ class DiceLoss(nn.Module):
 
 # Combined Segmentation Loss (Focal + Dice)
 class CombinedSegmentationLoss(nn.Module):
-    def __init__(self, focal_weight=0.5, dice_weight=0.5):
+    def __init__(self, focal_weight=0.3, dice_weight=0.7):  # Adjusted weights
         super(CombinedSegmentationLoss, self).__init__()
         self.focal_loss = FocalLoss()
         self.dice_loss = DiceLoss()
@@ -90,7 +88,6 @@ def visualize_predictions(model, val_loader, device):
             segmentation_pred, _ = model(images)
             segmentation_pred = torch.argmax(segmentation_pred, dim=1)
 
-            # Plot images, ground truth, and predictions
             plt.figure(figsize=(10, 5))
             plt.subplot(1, 3, 1)
             plt.imshow(images[0].cpu().permute(1, 2, 0))
@@ -120,7 +117,7 @@ def train(model_name="detector", num_epoch=150, lr=1e-3, patience=10):
         transforms.ToTensor(),
     ])
 
-    # Load dataset with augmentations
+    # Load dataset
     train_loader = load_data("drive_data/train")
     val_loader = load_data("drive_data/val")
 
@@ -128,12 +125,12 @@ def train(model_name="detector", num_epoch=150, lr=1e-3, patience=10):
     model = Detector().to(device)
 
     # Loss functions
-    criterion_segmentation = CombinedSegmentationLoss(focal_weight=0.5, dice_weight=0.5)  # Combined Focal + Dice Loss
+    criterion_segmentation = CombinedSegmentationLoss(focal_weight=0.3, dice_weight=0.7)
     criterion_depth = CombinedDepthLoss(l1_weight=0.8, mse_weight=0.2)
 
     # Optimizer with weight decay
     optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
-    scheduler = CosineAnnealingLR(optimizer, T_max=num_epoch, eta_min=1e-5)
+    scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=5, verbose=True)
 
     # Training loop
     best_val_loss = float('inf')
@@ -214,7 +211,7 @@ def train(model_name="detector", num_epoch=150, lr=1e-3, patience=10):
                 print(f"Early stopping at epoch {epoch + 1} with best validation loss: {best_val_loss:.4f}")
                 break
 
-        scheduler.step()
+        scheduler.step(avg_val_loss)
 
     # Visualize predictions after training
     visualize_predictions(model, val_loader, device)
