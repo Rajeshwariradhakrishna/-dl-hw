@@ -5,11 +5,9 @@ import os
 import numpy as np
 import matplotlib.pyplot as plt
 from torchvision import transforms
-from torch.utils.data import DataLoader
 from homework.datasets.drive_dataset import load_data
 from models import Detector, HOMEWORK_DIR
 from torch.optim.lr_scheduler import CosineAnnealingLR
-from torch.cuda.amp import GradScaler, autocast
 
 # Define log directory
 log_dir = str(HOMEWORK_DIR)
@@ -28,7 +26,7 @@ class IoULoss(nn.Module):
         self.smooth = smooth
 
     def forward(self, preds, targets):
-        preds = torch.softmax(preds, dim=1)  # Apply softmax to get probabilities
+        preds = torch.softmax(preds, dim=1)
         targets_one_hot = torch.nn.functional.one_hot(targets, num_classes=preds.shape[1]).permute(0, 3, 1, 2).float()
         intersection = (preds * targets_one_hot).sum(dim=(2, 3))
         union = preds.sum(dim=(2, 3)) + targets_one_hot.sum(dim=(2, 3)) - intersection
@@ -74,9 +72,8 @@ def visualize_predictions(model, val_loader, device):
             break
 
 # Training Function
-def train(model_name="detector", num_epoch=50, lr=1e-3, patience=10, batch_size=32, accumulation_steps=4):
+def train(model_name="detector", num_epoch=50, lr=1e-3, patience=10):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Using device: {device}")
 
     # Data Augmentation
     train_transform = transforms.Compose([
@@ -91,15 +88,8 @@ def train(model_name="detector", num_epoch=50, lr=1e-3, patience=10, batch_size=
     ])
 
     # Load dataset with augmentations
-    print("Loading training data...")
-    train_dataset = load_data("drive_data/train")  # Ensure this returns a dataset, not a DataLoader
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=8, pin_memory=True)
-    print(f"Loaded {len(train_dataset)} training samples.")
-
-    print("Loading validation data...")
-    val_dataset = load_data("drive_data/val")  # Ensure this returns a dataset, not a DataLoader
-    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=8, pin_memory=True)
-    print(f"Loaded {len(val_dataset)} validation samples.")
+    train_loader = load_data("drive_data/train")
+    val_loader = load_data("drive_data/val")
 
     # Initialize model
     model = Detector().to(device)
@@ -112,37 +102,32 @@ def train(model_name="detector", num_epoch=50, lr=1e-3, patience=10, batch_size=
     optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
     scheduler = CosineAnnealingLR(optimizer, T_max=num_epoch, eta_min=1e-5)
 
-    # Mixed precision training
-    scaler = GradScaler()
-
     # Training loop
-    best_val_iou = 0.0
+    best_val_loss = float('inf')
     epochs_no_improve = 0
 
     for epoch in range(num_epoch):
         model.train()
         total_train_loss, total_train_iou, total_train_depth_error = 0, 0, 0
 
-        for batch_idx, batch in enumerate(train_loader):
-            images = batch['image'].to(device, non_blocking=True)
-            segmentation_labels = batch['track'].to(device, non_blocking=True).long()
-            depth_labels = batch['depth'].to(device, non_blocking=True).unsqueeze(1)
+        for batch in train_loader:
+            images = batch['image'].to(device)
+            segmentation_labels = batch['track'].to(device).long()
+            depth_labels = batch['depth'].to(device).unsqueeze(1)
 
-            # Forward pass with mixed precision
-            with autocast():
-                segmentation_pred, depth_pred = model(images)
-                loss_segmentation = criterion_segmentation(segmentation_pred, segmentation_labels)
-                loss_depth = criterion_depth(depth_pred, depth_labels)
-                loss = (loss_segmentation + loss_depth) / accumulation_steps
+            optimizer.zero_grad()
+            segmentation_pred, depth_pred = model(images)
 
-            # Backward pass with scaling
-            scaler.scale(loss).backward()
+            loss_segmentation = criterion_segmentation(segmentation_pred, segmentation_labels)
+            loss_depth = criterion_depth(depth_pred, depth_labels)
+            loss = loss_segmentation + loss_depth
 
-            # Gradient accumulation
-            if (batch_idx + 1) % accumulation_steps == 0:
-                scaler.step(optimizer)
-                scaler.update()
-                optimizer.zero_grad()
+            if torch.isnan(loss).any():
+                print("NaN detected in loss. Stopping training.")
+                return
+
+            loss.backward()
+            optimizer.step()
 
             # Compute IoU
             iou_value = (1 - loss_segmentation).item()
@@ -152,53 +137,49 @@ def train(model_name="detector", num_epoch=50, lr=1e-3, patience=10, batch_size=
             total_train_iou += iou_value
             total_train_depth_error += depth_error
 
-            if batch_idx % 10 == 0:
-                print(f"Batch {batch_idx}/{len(train_loader)} - Loss: {loss.item():.4f}")
-
         avg_train_loss = total_train_loss / len(train_loader)
         avg_train_iou = total_train_iou / len(train_loader)
         avg_train_depth_error = total_train_depth_error / len(train_loader)
         print(f"Epoch [{epoch + 1}/{num_epoch}] - Train Loss: {avg_train_loss:.4f}, Train IoU: {avg_train_iou:.4f}, Train Depth Error: {avg_train_depth_error:.4f}")
 
-        # Validation (every 2 epochs to save time)
-        if (epoch + 1) % 2 == 0:
-            model.eval()
-            total_val_loss, total_val_iou, total_val_depth_error = 0, 0, 0
+        # Validation
+        model.eval()
+        total_val_loss, total_val_iou, total_val_depth_error = 0, 0, 0
 
-            with torch.no_grad():
-                for batch in val_loader:
-                    images = batch['image'].to(device, non_blocking=True)
-                    segmentation_labels = batch['track'].to(device, non_blocking=True).long()
-                    depth_labels = batch['depth'].to(device, non_blocking=True).unsqueeze(1)
+        with torch.no_grad():
+            for batch in val_loader:
+                images = batch['image'].to(device)
+                segmentation_labels = batch['track'].to(device).long()
+                depth_labels = batch['depth'].to(device).unsqueeze(1)
 
-                    segmentation_pred, depth_pred = model(images)
+                segmentation_pred, depth_pred = model(images)
 
-                    loss_segmentation = criterion_segmentation(segmentation_pred, segmentation_labels)
-                    loss_depth = criterion_depth(depth_pred, depth_labels)
-                    loss = loss_segmentation + loss_depth
+                loss_segmentation = criterion_segmentation(segmentation_pred, segmentation_labels)
+                loss_depth = criterion_depth(depth_pred, depth_labels)
+                loss = loss_segmentation + loss_depth
 
-                    iou_value = (1 - loss_segmentation).item()
-                    depth_error = loss_depth.item()
+                iou_value = (1 - loss_segmentation).item()
+                depth_error = loss_depth.item()
 
-                    total_val_loss += loss.item()
-                    total_val_iou += iou_value
-                    total_val_depth_error += depth_error
+                total_val_loss += loss.item()
+                total_val_iou += iou_value
+                total_val_depth_error += depth_error
 
-            avg_val_loss = total_val_loss / len(val_loader)
-            avg_val_iou = total_val_iou / len(val_loader)
-            avg_val_depth_error = total_val_depth_error / len(val_loader)
-            print(f"Epoch [{epoch + 1}/{num_epoch}] - Val Loss: {avg_val_loss:.4f}, Val IoU: {avg_val_iou:.4f}, Val Depth Error: {avg_val_depth_error:.4f}")
+        avg_val_loss = total_val_loss / len(val_loader)
+        avg_val_iou = total_val_iou / len(val_loader)
+        avg_val_depth_error = total_val_depth_error / len(val_loader)
+        print(f"Epoch [{epoch + 1}/{num_epoch}] - Val Loss: {avg_val_loss:.4f}, Val IoU: {avg_val_iou:.4f}, Val Depth Error: {avg_val_depth_error:.4f}")
 
-            # Check for improvement
-            if avg_val_iou > best_val_iou:
-                best_val_iou = avg_val_iou
-                epochs_no_improve = 0
-                save_model(model, model_name, log_dir)
-            else:
-                epochs_no_improve += 1
-                if epochs_no_improve >= patience:
-                    print(f"Early stopping at epoch {epoch + 1} with best validation IoU: {best_val_iou:.4f}")
-                    break
+        # Check for improvement
+        if avg_val_loss < best_val_loss:
+            best_val_loss = avg_val_loss
+            epochs_no_improve = 0
+            save_model(model, model_name, log_dir)
+        else:
+            epochs_no_improve += 1
+            if epochs_no_improve >= patience:
+                print(f"Early stopping at epoch {epoch + 1} with best validation loss: {best_val_loss:.4f}")
+                break
 
         scheduler.step()
 
@@ -207,4 +188,4 @@ def train(model_name="detector", num_epoch=50, lr=1e-3, patience=10, batch_size=
     print("Training complete!")
 
 if __name__ == "__main__":
-    train(model_name="detector", num_epoch=50, lr=1e-3, patience=10, batch_size=32, accumulation_steps=4)
+    train(model_name="detector", num_epoch=50, lr=1e-3, patience=10)
