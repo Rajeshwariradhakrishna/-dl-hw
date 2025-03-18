@@ -88,7 +88,7 @@ def visualize_predictions(model, val_loader, device):
             break
 
 # Training Function
-def train(model_name="detector", num_epoch=50, lr=1e-3, patience=10):
+def train(model_name="detector", num_epoch=50, lr=1e-3, patience=10, batch_size=32, accumulation_steps=4):
     # Check if GPU is available
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
@@ -107,11 +107,11 @@ def train(model_name="detector", num_epoch=50, lr=1e-3, patience=10):
 
     # Load dataset with augmentations
     print("Loading training data...")
-    train_loader = load_data("drive_data/train", num_workers=4, batch_size=16)
+    train_loader = load_data("drive_data/train", num_workers=8, batch_size=batch_size)
     print(f"Loaded {len(train_loader.dataset)} training samples.")
 
     print("Loading validation data...")
-    val_loader = load_data("drive_data/val", num_workers=4, batch_size=16)
+    val_loader = load_data("drive_data/val", num_workers=8, batch_size=batch_size)
     print(f"Loaded {len(val_loader.dataset)} validation samples.")
 
     # Check a sample batch
@@ -154,19 +154,21 @@ def train(model_name="detector", num_epoch=50, lr=1e-3, patience=10):
             segmentation_labels = batch['track'].to(device, non_blocking=True).long()
             depth_labels = batch['depth'].to(device, non_blocking=True).unsqueeze(1)
 
-            optimizer.zero_grad()
-
             # Forward pass with mixed precision
             with autocast():
                 segmentation_pred, depth_pred = model(images)
                 loss_segmentation = criterion_segmentation(segmentation_pred, segmentation_labels)
                 loss_depth = criterion_depth(depth_pred, depth_labels)
-                loss = loss_segmentation + loss_depth
+                loss = (loss_segmentation + loss_depth) / accumulation_steps
 
             # Backward pass with scaling
             scaler.scale(loss).backward()
-            scaler.step(optimizer)
-            scaler.update()
+
+            # Gradient accumulation
+            if (batch_idx + 1) % accumulation_steps == 0:
+                scaler.step(optimizer)
+                scaler.update()
+                optimizer.zero_grad()
 
             # Update confusion matrix
             confusion_matrix.update(segmentation_pred, segmentation_labels)
@@ -228,4 +230,4 @@ def train(model_name="detector", num_epoch=50, lr=1e-3, patience=10):
     print("Training complete!")
 
 if __name__ == "__main__":
-    train(model_name="detector", num_epoch=50, lr=1e-3, patience=10)
+    train(model_name="detector", num_epoch=50, lr=1e-3, patience=10, batch_size=32, accumulation_steps=4)
