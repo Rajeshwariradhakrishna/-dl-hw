@@ -5,6 +5,7 @@ import os
 import numpy as np
 import matplotlib.pyplot as plt
 from torchvision import transforms
+from torch.utils.data import DataLoader
 from homework.datasets.drive_dataset import load_data
 from models import Detector, HOMEWORK_DIR
 from torch.optim.lr_scheduler import CosineAnnealingLR
@@ -107,11 +108,13 @@ def train(model_name="detector", num_epoch=50, lr=1e-3, patience=10, batch_size=
 
     # Load dataset with augmentations
     print("Loading training data...")
-    train_loader = load_data("drive_data/train", num_workers=8, batch_size=batch_size, pin_memory=True)
+    train_dataset = load_data("drive_data/train")  # Load dataset without DataLoader
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=8, pin_memory=True)
     print(f"Loaded {len(train_loader.dataset)} training samples.")
 
     print("Loading validation data...")
-    val_loader = load_data("drive_data/val", num_workers=8, batch_size=batch_size, pin_memory=True)
+    val_dataset = load_data("drive_data/val")  # Load dataset without DataLoader
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=8, pin_memory=True)
     print(f"Loaded {len(val_loader.dataset)} validation samples.")
 
     # Check a sample batch
