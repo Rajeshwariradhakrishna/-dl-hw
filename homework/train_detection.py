@@ -108,14 +108,14 @@ def train(model_name="detector", num_epoch=50, lr=1e-3, patience=10, batch_size=
 
     # Load dataset with augmentations
     print("Loading training data...")
-    train_dataset = load_data("drive_data/train")  # Load dataset without DataLoader
+    train_dataset = load_data("drive_data/train")  # Ensure this returns a dataset, not a DataLoader
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=8, pin_memory=True)
-    print(f"Loaded {len(train_loader.dataset)} training samples.")
+    print(f"Loaded {len(train_dataset)} training samples.")
 
     print("Loading validation data...")
-    val_dataset = load_data("drive_data/val")  # Load dataset without DataLoader
+    val_dataset = load_data("drive_data/val")  # Ensure this returns a dataset, not a DataLoader
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=8, pin_memory=True)
-    print(f"Loaded {len(val_loader.dataset)} validation samples.")
+    print(f"Loaded {len(val_dataset)} validation samples.")
 
     # Check a sample batch
     sample_batch = next(iter(train_loader))
