@@ -107,11 +107,11 @@ def train(model_name="detector", num_epoch=50, lr=1e-3, patience=10):
 
     # Load dataset with augmentations
     print("Loading training data...")
-    train_loader = load_data("drive_data/train", num_workers=4, pin_memory=True, batch_size=16)
+    train_loader = load_data("drive_data/train", num_workers=4, batch_size=16)
     print(f"Loaded {len(train_loader.dataset)} training samples.")
 
     print("Loading validation data...")
-    val_loader = load_data("drive_data/val", num_workers=4, pin_memory=True, batch_size=16)
+    val_loader = load_data("drive_data/val", num_workers=4, batch_size=16)
     print(f"Loaded {len(val_loader.dataset)} validation samples.")
 
     # Check a sample batch
