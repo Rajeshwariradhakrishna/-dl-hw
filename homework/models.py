@@ -89,20 +89,12 @@ class Detector(torch.nn.Module):
         in_channels: int = 3,
         num_classes: int = 3,
     ):
-        """
-        A single model that performs segmentation and depth regression
-
-        Args:
-            in_channels: int, number of input channels
-            num_classes: int
-        """
         super().__init__()
 
         self.register_buffer("input_mean", torch.as_tensor(INPUT_MEAN))
         self.register_buffer("input_std", torch.as_tensor(INPUT_STD))
 
-        # TODO: implement
-       # Encoder
+        # Encoder
         self.encoder1 = self._conv_block(in_channels, 32)  # Reduced filters
         self.encoder2 = self._conv_block(32, 64)  # Reduced filters
         self.encoder3 = self._conv_block(64, 128)  # Reduced filters
@@ -114,12 +106,17 @@ class Detector(torch.nn.Module):
         self.decoder3 = self._upconv_block(64, 32)  # Reduced filters
         self.decoder4 = self._upconv_block(32, 16)  # Reduced filters
 
-        # Segmentation Head
-        self.segmentation_conv = nn.Conv2d(16, num_classes, kernel_size=1)
+        # Enhanced Segmentation Head
+        self.segmentation_head = nn.Sequential(
+            nn.Conv2d(16, 32, kernel_size=3, padding=1),  # Additional layer
+            nn.BatchNorm2d(32),
+            nn.ReLU(),
+            nn.Conv2d(32, num_classes, kernel_size=1),  # Final output
+        )
 
         # Depth Head
         self.depth_conv = nn.Conv2d(16, 1, kernel_size=1)
-    
+
     def _conv_block(self, in_channels, out_channels):
         return nn.Sequential(
             nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1),
@@ -136,22 +133,8 @@ class Detector(torch.nn.Module):
         )
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        """
-        Used in training, takes an image and returns raw logits and raw depth.
-        This is what the loss functions use as input.
-
-        Args:
-            x (torch.FloatTensor): image with shape (b, 3, h, w) and vals in [0, 1]
-
-        Returns:
-            tuple of (torch.FloatTensor, torch.FloatTensor):
-                - logits (b, num_classes, h, w)
-                - depth (b, h, w)
-        """
-        # optional: normalizes the input
         z = (x - self.input_mean[None, :, None, None]) / self.input_std[None, :, None, None]
 
-        # TODO: replace with actual forward pass
         # Encoder
         e1 = self.encoder1(z)
         e2 = self.encoder2(e1)
@@ -165,30 +148,15 @@ class Detector(torch.nn.Module):
         d4 = self.decoder4(d3)
 
         # Segmentation and Depth Heads
-        logits = self.segmentation_conv(d4)
+        logits = self.segmentation_head(d4)  # Enhanced segmentation head
         raw_depth = self.depth_conv(d4)
 
         return logits, raw_depth
 
     def predict(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        """
-        Used for inference, takes an image and returns class labels and normalized depth.
-        This is what the metrics use as input (this is what the grader will use!).
-
-        Args:
-            x (torch.FloatTensor): image with shape (b, 3, h, w) and vals in [0, 1]
-
-        Returns:
-            tuple of (torch.LongTensor, torch.FloatTensor):
-                - pred: class labels {0, 1, 2} with shape (b, h, w)
-                - depth: normalized depth [0, 1] with shape (b, h, w)
-        """
         logits, raw_depth = self(x)
         pred = logits.argmax(dim=1)
-
-        # Optional additional post-processing for depth only if needed
         depth = raw_depth.squeeze(1)
-
         return pred, depth
 
 
