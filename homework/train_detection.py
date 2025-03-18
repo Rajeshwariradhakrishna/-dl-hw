@@ -26,12 +26,14 @@ class IoULoss(nn.Module):
         self.smooth = smooth
 
     def forward(self, preds, targets):
-        preds = torch.softmax(preds, dim=1)
-        targets_one_hot = torch.nn.functional.one_hot(targets, num_classes=preds.shape[1]).permute(0, 3, 1, 2).float()
-        intersection = (preds * targets_one_hot).sum(dim=(2, 3))
-        union = preds.sum(dim=(2, 3)) + targets_one_hot.sum(dim=(2, 3)) - intersection
+        preds = torch.argmax(preds, dim=1)  # Convert softmax output to class indices
+        targets = targets.squeeze(1)  # Ensure targets have correct shape
+
+        intersection = (preds & targets).float().sum((1, 2))  # Pixel-wise AND operation
+        union = (preds | targets).float().sum((1, 2))  # Pixel-wise OR operation
+
         iou = (intersection + self.smooth) / (union + self.smooth)
-        return 1 - iou.mean()
+        return 1 - iou.mean()  # Return IoU loss
 
 # Combined Depth Loss (L1 + MSE)
 class CombinedDepthLoss(nn.Module):
