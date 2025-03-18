@@ -4,36 +4,14 @@ import torch.optim as optim
 import torchvision
 import matplotlib.pyplot as plt
 from torch.utils.data import DataLoader
+from sklearn.metrics import confusion_matrix
 import segmentation_models_pytorch as smp
 from torchvision import transforms
 from torch.utils.data import Dataset
+import numpy as np
 
 # ----------------------------
-# 1. Define the Dice Loss function
-class DiceLoss(nn.Module):
-    def __init__(self, smooth=1e-6):
-        super(DiceLoss, self).__init__()
-        self.smooth = smooth
-
-    def forward(self, preds, targets):
-        preds = torch.sigmoid(preds)  # Ensure values are between 0 and 1
-        intersection = (preds * targets).sum()
-        union = preds.sum() + targets.sum()
-        dice = (2. * intersection + self.smooth) / (union + self.smooth)
-        return 1 - dice
-
-# Combined loss function: CrossEntropy + DiceLoss
-class CombinedLoss(nn.Module):
-    def __init__(self):
-        super(CombinedLoss, self).__init__()
-        self.ce = nn.CrossEntropyLoss()  # Modify based on dataset type (binary or multi-class)
-        self.dice = DiceLoss()
-
-    def forward(self, preds, targets):
-        return self.ce(preds, targets) + self.dice(preds, targets)
-
-# ----------------------------
-# 2. Define the U-Net model
+# 1. Define the U-Net model
 class UNetModel(nn.Module):
     def __init__(self):
         super(UNetModel, self).__init__()
@@ -43,7 +21,7 @@ class UNetModel(nn.Module):
         return self.model(x)
 
 # ----------------------------
-# 3. Define dataset and augmentations
+# 2. Define dataset and augmentations
 class CustomDataset(Dataset):
     def __init__(self, images, masks, transform=None):
         self.images = images
@@ -63,7 +41,7 @@ class CustomDataset(Dataset):
         return image, mask
 
 # ----------------------------
-# 4. Apply data augmentations
+# 3. Apply data augmentations
 transform = transforms.Compose([
     transforms.RandomHorizontalFlip(),
     transforms.RandomRotation(10),
@@ -72,16 +50,17 @@ transform = transforms.Compose([
 ])
 
 # ----------------------------
-# 5. Training Loop
-def train_model(model, dataloader, optimizer, criterion, num_epochs=10):
+# 4. Train the model function with confusion matrix and lr scheduler
+def train_model(model, dataloader, optimizer, criterion, scheduler, num_epochs=10):
     best_model_wts = None
     best_loss = float('inf')
-    
+
     for epoch in range(num_epochs):
         model.train()
         running_loss = 0.0
-        running_iou = 0.0
-        
+        all_preds = []
+        all_labels = []
+
         for inputs, labels in dataloader:
             inputs = inputs.cuda()
             labels = labels.cuda()
@@ -95,20 +74,28 @@ def train_model(model, dataloader, optimizer, criterion, num_epochs=10):
 
             running_loss += loss.item()
 
-            # Compute IoU (Intersection over Union)
-            preds = torch.sigmoid(outputs) > 0.5  # Convert to binary mask
-            intersection = (preds * labels).sum().float()
-            union = preds.sum() + labels.sum() - intersection
-            iou = intersection / union if union != 0 else 0
-            running_iou += iou.item()
+            # Calculate confusion matrix
+            preds = torch.sigmoid(outputs) > 0.5
+            all_preds.append(preds.cpu().numpy())
+            all_labels.append(labels.cpu().numpy())
+
+        # Flatten all predictions and labels for confusion matrix
+        all_preds = np.concatenate(all_preds).flatten()
+        all_labels = np.concatenate(all_labels).flatten()
+
+        # Compute confusion matrix
+        cm = confusion_matrix(all_labels, all_preds)
+        print(f"Confusion Matrix for Epoch {epoch+1}: \n{cm}")
 
         epoch_loss = running_loss / len(dataloader)
-        epoch_iou = running_iou / len(dataloader)
-        print(f'Epoch [{epoch+1}/{num_epochs}] - Loss: {epoch_loss:.4f}, IoU: {epoch_iou:.4f}')
+        print(f'Epoch [{epoch+1}/{num_epochs}] - Loss: {epoch_loss:.4f}')
 
-        # Save model with best IoU
-        if epoch_iou > best_loss:
-            best_loss = epoch_iou
+        # Step the scheduler
+        scheduler.step(epoch_loss)
+
+        # Save model with best loss
+        if epoch_loss < best_loss:
+            best_loss = epoch_loss
             best_model_wts = model.state_dict()
 
     # Load best model weights
@@ -116,15 +103,18 @@ def train_model(model, dataloader, optimizer, criterion, num_epochs=10):
     return model
 
 # ----------------------------
-# 6. Initialize Model, Optimizer, Criterion, and DataLoader
+# 5. Initialize Model, Optimizer, Criterion, and DataLoader
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 model = UNetModel().to(device)
 
 # Using Adam optimizer
 optimizer = optim.Adam(model.parameters(), lr=1e-3)
 
-# Combined loss
-criterion = CombinedLoss()
+# CrossEntropy Loss
+criterion = nn.CrossEntropyLoss()
+
+# Learning rate scheduler (Reduce LR on Plateau)
+scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=3, verbose=True)
 
 # Example data (replace with your actual data)
 train_images = []  # Add your image data here
@@ -135,10 +125,10 @@ train_dataset = CustomDataset(train_images, train_masks, transform=transform)
 train_loader = DataLoader(train_dataset, batch_size=8, shuffle=True)
 
 # ----------------------------
-# 7. Start training
-model = train_model(model, train_loader, optimizer, criterion, num_epochs=10)
+# 6. Start training
+model = train_model(model, train_loader, optimizer, criterion, scheduler, num_epochs=10)
 
 # ----------------------------
-# 8. Save the model
+# 7. Save the model
 torch.save(model.state_dict(), "detector.th")
 print("Model saved to detector.th")
