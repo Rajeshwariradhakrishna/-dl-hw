@@ -107,11 +107,11 @@ def train(model_name="detector", num_epoch=50, lr=1e-3, patience=10, batch_size=
 
     # Load dataset with augmentations
     print("Loading training data...")
-    train_loader = load_data("drive_data/train", num_workers=8, batch_size=batch_size)
+    train_loader = load_data("drive_data/train", num_workers=8, batch_size=batch_size, pin_memory=True)
     print(f"Loaded {len(train_loader.dataset)} training samples.")
 
     print("Loading validation data...")
-    val_loader = load_data("drive_data/val", num_workers=8, batch_size=batch_size)
+    val_loader = load_data("drive_data/val", num_workers=8, batch_size=batch_size, pin_memory=True)
     print(f"Loaded {len(val_loader.dataset)} validation samples.")
 
     # Check a sample batch
@@ -181,47 +181,48 @@ def train(model_name="detector", num_epoch=50, lr=1e-3, patience=10, batch_size=
         train_iou = confusion_matrix.compute_iou()
         train_metrics["iou"].append(train_iou)
 
-        # Validation
-        model.eval()
-        confusion_matrix.reset()
+        # Validation (every 2 epochs to save time)
+        if (epoch + 1) % 2 == 0:
+            model.eval()
+            confusion_matrix.reset()
 
-        print("Running validation...")
-        with torch.no_grad():
-            for batch_idx, batch in enumerate(val_loader):
-                images = batch['image'].to(device, non_blocking=True)
-                segmentation_labels = batch['track'].to(device, non_blocking=True).long()
-                depth_labels = batch['depth'].to(device, non_blocking=True).unsqueeze(1)
+            print("Running validation...")
+            with torch.no_grad():
+                for batch_idx, batch in enumerate(val_loader):
+                    images = batch['image'].to(device, non_blocking=True)
+                    segmentation_labels = batch['track'].to(device, non_blocking=True).long()
+                    depth_labels = batch['depth'].to(device, non_blocking=True).unsqueeze(1)
 
-                segmentation_pred, depth_pred = model(images)
+                    segmentation_pred, depth_pred = model(images)
 
-                loss_segmentation = criterion_segmentation(segmentation_pred, segmentation_labels)
-                loss_depth = criterion_depth(depth_pred, depth_labels)
-                loss = loss_segmentation + loss_depth
+                    loss_segmentation = criterion_segmentation(segmentation_pred, segmentation_labels)
+                    loss_depth = criterion_depth(depth_pred, depth_labels)
+                    loss = loss_segmentation + loss_depth
 
-                # Update confusion matrix
-                confusion_matrix.update(segmentation_pred, segmentation_labels)
-                val_metrics["depth_error"].append(loss_depth.item())
+                    # Update confusion matrix
+                    confusion_matrix.update(segmentation_pred, segmentation_labels)
+                    val_metrics["depth_error"].append(loss_depth.item())
 
-                if batch_idx % 10 == 0:
-                    print(f"Validation Batch {batch_idx}/{len(val_loader)} - Loss: {loss.item():.4f}")
+                    if batch_idx % 10 == 0:
+                        print(f"Validation Batch {batch_idx}/{len(val_loader)} - Loss: {loss.item():.4f}")
 
-        # Compute validation IoU
-        val_iou = confusion_matrix.compute_iou()
-        val_metrics["iou"].append(val_iou)
+            # Compute validation IoU
+            val_iou = confusion_matrix.compute_iou()
+            val_metrics["iou"].append(val_iou)
 
-        # Print metrics
-        print(f"Epoch [{epoch + 1}/{num_epoch}] - Train IoU: {train_iou:.4f}, Val IoU: {val_iou:.4f}")
+            # Print metrics
+            print(f"Epoch [{epoch + 1}/{num_epoch}] - Train IoU: {train_iou:.4f}, Val IoU: {val_iou:.4f}")
 
-        # Check for improvement
-        if val_iou > best_val_iou:
-            best_val_iou = val_iou
-            epochs_no_improve = 0
-            save_model(model, model_name, log_dir)
-        else:
-            epochs_no_improve += 1
-            if epochs_no_improve >= patience:
-                print(f"Early stopping at epoch {epoch + 1} with best validation IoU: {best_val_iou:.4f}")
-                break
+            # Check for improvement
+            if val_iou > best_val_iou:
+                best_val_iou = val_iou
+                epochs_no_improve = 0
+                save_model(model, model_name, log_dir)
+            else:
+                epochs_no_improve += 1
+                if epochs_no_improve >= patience:
+                    print(f"Early stopping at epoch {epoch + 1} with best validation IoU: {best_val_iou:.4f}")
+                    break
 
         scheduler.step()
 
