@@ -14,7 +14,6 @@ log_dir = str(HOMEWORK_DIR)
 os.makedirs(log_dir, exist_ok=True)
 
 def save_model(model, model_name, log_dir):
-    """Save the model's state_dict to the specified directory."""
     model_path = os.path.join(log_dir, f"{model_name}.th")
     torch.save(model.state_dict(), model_path)
     print(f"Model saved to {model_path}")
@@ -32,6 +31,34 @@ class IoULoss(nn.Module):
         union = preds.sum(dim=(2, 3)) + targets_one_hot.sum(dim=(2, 3)) - intersection
         iou = (intersection + self.smooth) / (union + self.smooth)
         return 1 - iou.mean()
+
+# Dice Loss for Segmentation
+class DiceLoss(nn.Module):
+    def __init__(self, smooth=1e-6):
+        super(DiceLoss, self).__init__()
+        self.smooth = smooth
+
+    def forward(self, preds, targets):
+        preds = torch.softmax(preds, dim=1)
+        targets_one_hot = torch.nn.functional.one_hot(targets, num_classes=preds.shape[1]).permute(0, 3, 1, 2).float()
+        intersection = (preds * targets_one_hot).sum(dim=(2, 3))
+        union = preds.sum(dim=(2, 3)) + targets_one_hot.sum(dim=(2, 3))
+        dice = (2 * intersection + self.smooth) / (union + self.smooth)
+        return 1 - dice.mean()
+
+# Combined Segmentation Loss (IoU + Dice)
+class CombinedSegmentationLoss(nn.Module):
+    def __init__(self, iou_weight=0.5, dice_weight=0.5):
+        super(CombinedSegmentationLoss, self).__init__()
+        self.iou_loss = IoULoss()
+        self.dice_loss = DiceLoss()
+        self.iou_weight = iou_weight
+        self.dice_weight = dice_weight
+
+    def forward(self, preds, targets):
+        iou_loss = self.iou_loss(preds, targets)
+        dice_loss = self.dice_loss(preds, targets)
+        return self.iou_weight * iou_loss + self.dice_weight * dice_loss
 
 # Combined Depth Loss (L1 + MSE)
 class CombinedDepthLoss(nn.Module):
@@ -72,15 +99,15 @@ def visualize_predictions(model, val_loader, device):
             break
 
 # Training Function
-def train(model_name="detector", num_epoch=500, lr=1e-3, patience=10):  # Increased num_epoch to 100
+def train(model_name="detector", num_epoch=500, lr=1e-3, patience=10):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # Data Augmentation
     train_transform = transforms.Compose([
         transforms.RandomHorizontalFlip(),
-        transforms.RandomRotation(20),
-        transforms.RandomResizedCrop((256, 256), scale=(0.8, 1.0)),
-        transforms.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.3),
+        transforms.RandomRotation(30),  # Increased rotation
+        transforms.RandomResizedCrop((256, 256), scale=(0.7, 1.0)),  # Increased scale range
+        transforms.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.4),  # Increased jitter
         transforms.ToTensor(),
     ])
     val_transform = transforms.Compose([
@@ -95,7 +122,7 @@ def train(model_name="detector", num_epoch=500, lr=1e-3, patience=10):  # Increa
     model = Detector().to(device)
 
     # Loss functions
-    criterion_segmentation = IoULoss()  # Use IoU Loss for segmentation
+    criterion_segmentation = CombinedSegmentationLoss(iou_weight=0.5, dice_weight=0.5)  # Combined IoU + Dice Loss
     criterion_depth = CombinedDepthLoss(l1_weight=0.8, mse_weight=0.2)
 
     # Optimizer with weight decay
@@ -188,4 +215,4 @@ def train(model_name="detector", num_epoch=500, lr=1e-3, patience=10):  # Increa
     print("Training complete!")
 
 if __name__ == "__main__":
-    train(model_name="detector", num_epoch=100, lr=1e-3, patience=10)  # Increased num_epoch to 100
+    train(model_name="detector", num_epoch=500, lr=1e-3, patience=10)
