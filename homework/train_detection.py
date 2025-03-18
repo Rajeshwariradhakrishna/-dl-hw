@@ -103,8 +103,20 @@ def train(model_name="detector", num_epoch=50, lr=1e-3, patience=10):
     ])
 
     # Load dataset with augmentations
-    train_loader = load_data("drive_data/train")
-    val_loader = load_data("drive_data/val")
+    print("Loading training data...")
+    train_loader = load_data("drive_data/train", transform=train_transform)
+    print(f"Loaded {len(train_loader.dataset)} training samples.")
+
+    print("Loading validation data...")
+    val_loader = load_data("drive_data/val", transform=val_transform)
+    print(f"Loaded {len(val_loader.dataset)} validation samples.")
+
+    # Check a sample batch
+    sample_batch = next(iter(train_loader))
+    print("Sample batch keys:", sample_batch.keys())
+    print("Sample image shape:", sample_batch['image'].shape)
+    print("Sample track shape:", sample_batch['track'].shape)
+    print("Sample depth shape:", sample_batch['depth'].shape)
 
     # Initialize model
     model = Detector().to(device)
@@ -130,7 +142,8 @@ def train(model_name="detector", num_epoch=50, lr=1e-3, patience=10):
         model.train()
         confusion_matrix.reset()
 
-        for batch in train_loader:
+        print(f"Starting epoch {epoch + 1}/{num_epoch}...")
+        for batch_idx, batch in enumerate(train_loader):
             images = batch['image'].to(device)
             segmentation_labels = batch['track'].to(device).long()
             depth_labels = batch['depth'].to(device).unsqueeze(1)
@@ -153,6 +166,9 @@ def train(model_name="detector", num_epoch=50, lr=1e-3, patience=10):
             confusion_matrix.update(segmentation_pred, segmentation_labels)
             train_metrics["depth_error"].append(loss_depth.item())
 
+            if batch_idx % 10 == 0:
+                print(f"Batch {batch_idx}/{len(train_loader)} - Loss: {loss.item():.4f}")
+
         # Compute training IoU
         train_iou = confusion_matrix.compute_iou()
         train_metrics["iou"].append(train_iou)
@@ -161,8 +177,9 @@ def train(model_name="detector", num_epoch=50, lr=1e-3, patience=10):
         model.eval()
         confusion_matrix.reset()
 
+        print("Running validation...")
         with torch.no_grad():
-            for batch in val_loader:
+            for batch_idx, batch in enumerate(val_loader):
                 images = batch['image'].to(device)
                 segmentation_labels = batch['track'].to(device).long()
                 depth_labels = batch['depth'].to(device).unsqueeze(1)
@@ -176,6 +193,9 @@ def train(model_name="detector", num_epoch=50, lr=1e-3, patience=10):
                 # Update confusion matrix
                 confusion_matrix.update(segmentation_pred, segmentation_labels)
                 val_metrics["depth_error"].append(loss_depth.item())
+
+                if batch_idx % 10 == 0:
+                    print(f"Validation Batch {batch_idx}/{len(val_loader)} - Loss: {loss.item():.4f}")
 
         # Compute validation IoU
         val_iou = confusion_matrix.compute_iou()
