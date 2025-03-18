@@ -102,17 +102,19 @@ class Detector(torch.nn.Module):
         self.register_buffer("input_std", torch.as_tensor(INPUT_STD))
 
         # TODO: implement
-           # Encoder
+        # Encoder
         self.encoder1 = self._conv_block(in_channels, 64)
         self.encoder2 = self._conv_block(64, 128)
         self.encoder3 = self._conv_block(128, 256)
         self.encoder4 = self._conv_block(256, 512)
+        self.encoder5 = self._conv_block(512, 1024)  # Additional layer
 
-        # Decoder with skip connections
-        self.decoder1 = self._upconv_block(512, 256)
-        self.decoder2 = self._upconv_block(256, 128)
-        self.decoder3 = self._upconv_block(128, 64)
-        self.decoder4 = self._upconv_block(64, 32)
+        # Enhanced Decoder with skip connections
+        self.decoder1 = self._upconv_block(1024, 512)
+        self.decoder2 = self._upconv_block(512, 256)
+        self.decoder3 = self._upconv_block(256, 128)
+        self.decoder4 = self._upconv_block(128, 64)
+        self.decoder5 = self._upconv_block(64, 32)  # Additional layer
 
         # Segmentation Head
         self.segmentation_conv = nn.Conv2d(32, num_classes, kernel_size=1)
@@ -152,22 +154,23 @@ class Detector(torch.nn.Module):
         z = (x - self.input_mean[None, :, None, None]) / self.input_std[None, :, None, None]
 
         # TODO: replace with actual forward pass
-        # Encoder: down-sampling the spatial dimensions
-        # Encoder
+         # Encoder
         e1 = self.encoder1(z)
         e2 = self.encoder2(e1)
         e3 = self.encoder3(e2)
         e4 = self.encoder4(e3)
+        e5 = self.encoder5(e4)  # Additional layer
 
         # Decoder with skip connections
-        d1 = self.decoder1(e4) + e3
-        d2 = self.decoder2(d1) + e2
-        d3 = self.decoder3(d2) + e1
-        d4 = self.decoder4(d3)
+        d1 = self.decoder1(e5) + e4
+        d2 = self.decoder2(d1) + e3
+        d3 = self.decoder3(d2) + e2
+        d4 = self.decoder4(d3) + e1
+        d5 = self.decoder5(d4)  # Additional layer
 
         # Segmentation and Depth Heads
-        logits = self.segmentation_conv(d4)
-        raw_depth = self.depth_conv(d4)
+        logits = self.segmentation_conv(d5)
+        raw_depth = self.depth_conv(d5)
 
         return logits, raw_depth
 
