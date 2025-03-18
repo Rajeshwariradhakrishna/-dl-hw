@@ -1,194 +1,190 @@
 import torch
-import torch.optim as optim
 import torch.nn as nn
-import os
+import torch.optim as optim
+from torch.utils.data import DataLoader, Dataset
+import torchvision.transforms as transforms
 import numpy as np
+from tqdm import tqdm
 import matplotlib.pyplot as plt
-from torchvision import transforms
-from homework.datasets.drive_dataset import load_data
-from models import Detector, HOMEWORK_DIR
-from torch.optim.lr_scheduler import CosineAnnealingLR
 
-# Define log directory
-log_dir = str(HOMEWORK_DIR)
-os.makedirs(log_dir, exist_ok=True)
+# Example Dataset Class (Make sure to replace it with your actual dataset class)
+class SegmentationDataset(Dataset):
+    def __init__(self, images, masks, transform=None):
+        self.images = images  # list of image paths
+        self.masks = masks    # list of corresponding mask paths
+        self.transform = transform
+        
+    def __len__(self):
+        return len(self.images)
 
-def save_model(model, model_name, log_dir):
-    """Save the model's state_dict to the specified directory."""
-    model_path = os.path.join(log_dir, f"{model_name}.th")
-    torch.save(model.state_dict(), model_path)
-    print(f"Model saved to {model_path}")
+    def __getitem__(self, idx):
+        image = plt.imread(self.images[idx])  # Replace with your image loading
+        mask = plt.imread(self.masks[idx])  # Replace with your mask loading
 
-# IoU Loss for Segmentation
-class IoULoss(nn.Module):
-    def __init__(self, smooth=1e-6):
-        super(IoULoss, self).__init__()
-        self.smooth = smooth
+        if self.transform:
+            image, mask = self.transform(image, mask)
+        
+        return image, mask
 
-    def forward(self, preds, targets):
-        preds = torch.softmax(preds, dim=1)  # Apply softmax to the predicted logits
-        targets_one_hot = torch.nn.functional.one_hot(targets, num_classes=preds.shape[1]).permute(0, 3, 1, 2).float()
+# Dice Coefficient Calculation (for IoU)
+def dice_coefficient(pred, target, smooth=1e-6):
+    intersection = (pred * target).sum()
+    return (2. * intersection + smooth) / (pred.sum() + target.sum() + smooth)
 
-        # Intersection and union calculation
-        intersection = (preds * targets_one_hot).sum(dim=(2, 3))  # Sum along spatial dimensions
-        union = preds.sum(dim=(2, 3)) + targets_one_hot.sum(dim=(2, 3)) - intersection
-        iou = (intersection + self.smooth) / (union + self.smooth)  # Avoid division by zero
+# IoU Calculation
+def intersection_over_union(pred, target, smooth=1e-6):
+    intersection = (pred * target).sum()
+    union = (pred + target).sum() - intersection
+    return (intersection + smooth) / (union + smooth)
 
-        return 1 - iou.mean()  # Return 1 - IoU to minimize loss
+# UNet-like Architecture (Simple example)
+class UNet(nn.Module):
+    def __init__(self, in_channels=3, out_channels=1):
+        super(UNet, self).__init__()
+        
+        self.encoder = nn.Sequential(
+            nn.Conv2d(in_channels, 64, kernel_size=3, padding=1),
+            nn.ReLU(),
+            nn.Conv2d(64, 64, kernel_size=3, padding=1),
+            nn.ReLU(),
+            nn.MaxPool2d(kernel_size=2, stride=2)
+        )
+        
+        self.middle = nn.Sequential(
+            nn.Conv2d(64, 128, kernel_size=3, padding=1),
+            nn.ReLU(),
+            nn.Conv2d(128, 128, kernel_size=3, padding=1),
+            nn.ReLU()
+        )
+        
+        self.decoder = nn.Sequential(
+            nn.Conv2d(128, 64, kernel_size=3, padding=1),
+            nn.ReLU(),
+            nn.Conv2d(64, out_channels, kernel_size=3, padding=1),
+            nn.Sigmoid()
+        )
+    
+    def forward(self, x):
+        x1 = self.encoder(x)
+        x2 = self.middle(x1)
+        out = self.decoder(x2)
+        return out
 
-# Combined Depth Loss (L1 + MSE)
-class CombinedDepthLoss(nn.Module):
-    def __init__(self, l1_weight=0.8, mse_weight=0.2):
-        super(CombinedDepthLoss, self).__init__()
-        self.l1_loss = nn.L1Loss()
-        self.mse_loss = nn.MSELoss()
-        self.l1_weight = l1_weight
-        self.mse_weight = mse_weight
+# Loss Function: Dice Loss + Cross-Entropy (for segmentation)
+class DiceLoss(nn.Module):
+    def __init__(self):
+        super(DiceLoss, self).__init__()
 
-    def forward(self, preds, targets):
-        l1_loss = self.l1_loss(preds, targets)
-        mse_loss = self.mse_loss(preds, targets)
-        return self.l1_weight * l1_loss + self.mse_weight * mse_loss
+    def forward(self, outputs, targets):
+        smooth = 1e-6
+        outputs = outputs.view(-1)
+        targets = targets.view(-1)
+        
+        intersection = (outputs * targets).sum()
+        dice = (2. * intersection + smooth) / (outputs.sum() + targets.sum() + smooth)
+        return 1 - dice  # We minimize Dice Loss
 
-# Visualize Predictions
-def visualize_predictions(model, val_loader, device):
-    model.eval()
-    with torch.no_grad():
-        for batch in val_loader:
-            images = batch['image'].to(device)
-            segmentation_labels = batch['track'].to(device).long()
-            segmentation_pred, _ = model(images)
-            segmentation_pred = torch.argmax(segmentation_pred, dim=1)
+# Data Augmentation Transform
+class Transform:
+    def __init__(self):
+        self.transforms = transforms.Compose([
+            transforms.ToPILImage(),
+            transforms.RandomHorizontalFlip(),
+            transforms.RandomVerticalFlip(),
+            transforms.RandomRotation(30),
+            transforms.RandomResizedCrop(256, scale=(0.8, 1.0), ratio=(0.75, 1.25)),
+            transforms.ToTensor(),
+        ])
+    
+    def __call__(self, image, mask):
+        image = self.transforms(image)
+        mask = self.transforms(mask)
+        return image, mask
 
-            # Plot images, ground truth, and predictions
-            plt.figure(figsize=(10, 5))
-            plt.subplot(1, 3, 1)
-            plt.imshow(images[0].cpu().permute(1, 2, 0))
-            plt.title("Image")
-            plt.subplot(1, 3, 2)
-            plt.imshow(segmentation_labels[0].cpu(), cmap="jet")
-            plt.title("Ground Truth")
-            plt.subplot(1, 3, 3)
-            plt.imshow(segmentation_pred[0].cpu(), cmap="jet")
-            plt.title("Prediction")
-            plt.show()
-            break
+# Training Loop
+def train(model, train_loader, val_loader, criterion, optimizer, num_epochs=10):
+    best_model_wts = model.state_dict()
+    best_iou = 0.0
 
-# Training Function
-def train(model_name="detector", num_epoch=50, lr=1e-3, patience=10):
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-    # Data Augmentation
-    train_transform = transforms.Compose([
-        transforms.RandomHorizontalFlip(),
-        transforms.RandomRotation(20),
-        transforms.RandomResizedCrop((256, 256), scale=(0.8, 1.0)),
-        transforms.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.3),
-        transforms.ToTensor(),
-    ])
-    val_transform = transforms.Compose([
-        transforms.ToTensor(),
-    ])
-
-    # Load dataset with augmentations
-    train_loader = load_data("drive_data/train")
-    val_loader = load_data("drive_data/val")
-
-    # Initialize model
-    model = Detector().to(device)
-
-    # Loss functions
-    criterion_segmentation = IoULoss()  # Use IoU Loss for segmentation
-    criterion_depth = CombinedDepthLoss(l1_weight=0.8, mse_weight=0.2)
-
-    # Optimizer with weight decay
-    optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
-    scheduler = CosineAnnealingLR(optimizer, T_max=num_epoch, eta_min=1e-5)
-
-    # Training loop
-    best_val_loss = float('inf')
-    epochs_no_improve = 0
-
-    for epoch in range(num_epoch):
+    for epoch in range(num_epochs):
         model.train()
-        total_train_loss, total_train_iou, total_train_depth_error = 0, 0, 0
-
-        for batch in train_loader:
-            images = batch['image'].to(device)
-            segmentation_labels = batch['track'].to(device).long()
-            depth_labels = batch['depth'].to(device).unsqueeze(1)
-
+        running_loss = 0.0
+        running_iou = 0.0
+        for images, masks in tqdm(train_loader, desc=f'Epoch {epoch+1}/{num_epochs}', leave=False):
             optimizer.zero_grad()
-            segmentation_pred, depth_pred = model(images)
+            
+            images, masks = images.cuda(), masks.cuda()
 
-            loss_segmentation = criterion_segmentation(segmentation_pred, segmentation_labels)
-            loss_depth = criterion_depth(depth_pred, depth_labels)
-            loss = loss_segmentation + loss_depth
-
-            if torch.isnan(loss).any():
-                print("NaN detected in loss. Stopping training.")
-                return
-
+            outputs = model(images)
+            
+            loss = criterion(outputs, masks)
             loss.backward()
             optimizer.step()
 
-            # Compute IoU
-            iou_value = (1 - loss_segmentation).item()
-            depth_error = loss_depth.item()
+            running_loss += loss.item()
 
-            total_train_loss += loss.item()
-            total_train_iou += iou_value
-            total_train_depth_error += depth_error
+            # Calculate IoU
+            outputs = (outputs > 0.5).float()  # Thresholding the output
+            iou = intersection_over_union(outputs, masks)
+            running_iou += iou.item()
 
-        avg_train_loss = total_train_loss / len(train_loader)
-        avg_train_iou = total_train_iou / len(train_loader)
-        avg_train_depth_error = total_train_depth_error / len(train_loader)
-        print(f"Epoch [{epoch + 1}/{num_epoch}] - Train Loss: {avg_train_loss:.4f}, Train IoU: {avg_train_iou:.4f}, Train Depth Error: {avg_train_depth_error:.4f}")
+        epoch_loss = running_loss / len(train_loader)
+        epoch_iou = running_iou / len(train_loader)
+        print(f"Epoch [{epoch+1}/{num_epochs}] - Loss: {epoch_loss:.4f}, IoU: {epoch_iou:.4f}")
 
         # Validation
         model.eval()
-        total_val_loss, total_val_iou, total_val_depth_error = 0, 0, 0
-
+        val_iou = 0.0
         with torch.no_grad():
-            for batch in val_loader:
-                images = batch['image'].to(device)
-                segmentation_labels = batch['track'].to(device).long()
-                depth_labels = batch['depth'].to(device).unsqueeze(1)
+            for images, masks in val_loader:
+                images, masks = images.cuda(), masks.cuda()
 
-                segmentation_pred, depth_pred = model(images)
+                outputs = model(images)
+                outputs = (outputs > 0.5).float()
+                iou = intersection_over_union(outputs, masks)
+                val_iou += iou.item()
 
-                loss_segmentation = criterion_segmentation(segmentation_pred, segmentation_labels)
-                loss_depth = criterion_depth(depth_pred, depth_labels)
-                loss = loss_segmentation + loss_depth
+        val_iou /= len(val_loader)
+        print(f"Validation IoU: {val_iou:.4f}")
 
-                iou_value = (1 - loss_segmentation).item()
-                depth_error = loss_depth.item()
+        # Save the best model based on IoU
+        if val_iou > best_iou:
+            best_iou = val_iou
+            best_model_wts = model.state_dict()
 
-                total_val_loss += loss.item()
-                total_val_iou += iou_value
-                total_val_depth_error += depth_error
+    print(f"Best Validation IoU: {best_iou:.4f}")
+    model.load_state_dict(best_model_wts)
+    return model
 
-        avg_val_loss = total_val_loss / len(val_loader)
-        avg_val_iou = total_val_iou / len(val_loader)
-        avg_val_depth_error = total_val_depth_error / len(val_loader)
-        print(f"Epoch [{epoch + 1}/{num_epoch}] - Val Loss: {avg_val_loss:.4f}, Val IoU: {avg_val_iou:.4f}, Val Depth Error: {avg_val_depth_error:.4f}")
+# Main Function to Set Up the Model and Start Training
+def main():
+    # Example file paths (replace with your actual paths)
+    train_images = ['path/to/train/image1.png', 'path/to/train/image2.png']
+    train_masks = ['path/to/train/mask1.png', 'path/to/train/mask2.png']
+    val_images = ['path/to/val/image1.png', 'path/to/val/image2.png']
+    val_masks = ['path/to/val/mask1.png', 'path/to/val/mask2.png']
 
-        # Check for improvement
-        if avg_val_loss < best_val_loss:
-            best_val_loss = avg_val_loss
-            epochs_no_improve = 0
-            save_model(model, model_name, log_dir)
-        else:
-            epochs_no_improve += 1
-            if epochs_no_improve >= patience:
-                print(f"Early stopping at epoch {epoch + 1} with best validation loss: {best_val_loss:.4f}")
-                break
+    train_transform = Transform()
+    val_transform = Transform()
 
-        scheduler.step()
+    # Create datasets and dataloaders
+    train_dataset = SegmentationDataset(train_images, train_masks, transform=train_transform)
+    val_dataset = SegmentationDataset(val_images, val_masks, transform=val_transform)
 
-    # Visualize predictions after training
-    visualize_predictions(model, val_loader, device)
-    print("Training complete!")
+    train_loader = DataLoader(train_dataset, batch_size=8, shuffle=True)
+    val_loader = DataLoader(val_dataset, batch_size=8, shuffle=False)
+
+    # Initialize Model, Criterion, and Optimizer
+    model = UNet(in_channels=3, out_channels=1).cuda()  # Use GPU if available
+    criterion = DiceLoss()
+    optimizer = optim.Adam(model.parameters(), lr=1e-4)
+
+    # Train the model
+    model = train(model, train_loader, val_loader, criterion, optimizer, num_epochs=10)
+
+    # Save the trained model
+    torch.save(model.state_dict(), 'segmentation_model.pth')
+    print("Model saved to segmentation_model.pth")
 
 if __name__ == "__main__":
-    train(model_name="detector", num_epoch=50, lr=1e-3, patience=10)
+    main()
