@@ -26,12 +26,11 @@ class DiceLoss(nn.Module):
 class CombinedLoss(nn.Module):
     def __init__(self):
         super(CombinedLoss, self).__init__()
-        self.ce = nn.CrossEntropyLoss()
+        self.ce = nn.CrossEntropyLoss()  # Modify based on dataset type (binary or multi-class)
         self.dice = DiceLoss()
 
     def forward(self, preds, targets):
         return self.ce(preds, targets) + self.dice(preds, targets)
-
 
 # ----------------------------
 # 2. Define the U-Net model
@@ -97,7 +96,7 @@ def train_model(model, dataloader, optimizer, criterion, num_epochs=10):
             running_loss += loss.item()
 
             # Compute IoU (Intersection over Union)
-            preds = torch.sigmoid(outputs) > 0.5
+            preds = torch.sigmoid(outputs) > 0.5  # Convert to binary mask
             intersection = (preds * labels).sum().float()
             union = preds.sum() + labels.sum() - intersection
             iou = intersection / union if union != 0 else 0
