@@ -102,7 +102,6 @@ class Detector(torch.nn.Module):
         self.register_buffer("input_std", torch.as_tensor(INPUT_STD))
 
         # TODO: implement
-        # Encoder
         self.encoder1 = self._conv_block(in_channels, 32)  # Layer 1
         self.encoder2 = self._conv_block(32, 64)  # Layer 2
         self.encoder3 = self._conv_block(64, 128)  # Layer 3
@@ -163,6 +162,10 @@ class Detector(torch.nn.Module):
         # Heads (Segmentation and Depth)
         logits = self.segmentation_head(d3)  # Segmentation Head
         raw_depth = self.depth_head(d3)  # Depth Head
+
+        # Resize logits and raw_depth to match input spatial dimensions
+        logits = torch.nn.functional.interpolate(logits, size=x.shape[2:], mode='bilinear', align_corners=False)
+        raw_depth = torch.nn.functional.interpolate(raw_depth, size=x.shape[2:], mode='bilinear', align_corners=False)
 
         return logits, raw_depth
 
