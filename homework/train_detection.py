@@ -221,4 +221,4 @@ def train(model_name="detector", num_epoch=500, lr=1e-3, patience=10):
     print("Training complete!")
 
 if __name__ == "__main__":
-    train(model_name="detector", num_epoch=500, lr=1e-3, patience=10)
+    train(model_name="detector", num_epoch=150, lr=1e-3, patience=10)
