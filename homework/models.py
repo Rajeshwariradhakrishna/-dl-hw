@@ -103,16 +103,22 @@ class Detector(torch.nn.Module):
         self.register_buffer("input_std", torch.as_tensor(INPUT_STD))
 
         # TODO: implement
-        # Pre-trained ResNet18 as encoder
+        # Load pre-trained ResNet18
         self.encoder = torchvision.models.resnet18(pretrained=True)
-        self.encoder.conv1 = nn.Conv2d(in_channels, 64, kernel_size=7, stride=2, padding=3, bias=False)
+
+        # Modify the first convolutional layer to accept the correct number of input channels
+        self.encoder.conv1 = nn.Conv2d(
+            in_channels, 64, kernel_size=7, stride=2, padding=3, bias=False
+        )
+
+        # Remove the fully connected layer (we don't need it for segmentation)
         self.encoder.fc = nn.Identity()
 
         # Decoder with skip connections
         self.decoder1 = self._upconv_block(512, 256)
-        self.decoder2 = self._upconv_block(512, 128)
-        self.decoder3 = self._upconv_block(256, 64)
-        self.decoder4 = self._upconv_block(128, 32)
+        self.decoder2 = self._upconv_block(512, 128)  # 512 = 256 (decoder) + 256 (skip)
+        self.decoder3 = self._upconv_block(256, 64)   # 256 = 128 (decoder) + 128 (skip)
+        self.decoder4 = self._upconv_block(128, 32)   # 128 = 64 (decoder) + 64 (skip)
 
         # Heads
         self.segmentation_head = nn.Conv2d(64, num_classes, kernel_size=1)
@@ -124,7 +130,7 @@ class Detector(torch.nn.Module):
             nn.BatchNorm2d(out_channels),
             nn.ReLU(),
             nn.Dropout(0.2)  # Added dropout for regularization
-        )
+        )   
     
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """
@@ -144,28 +150,29 @@ class Detector(torch.nn.Module):
 
         # TODO: replace with actual forward pass
         # Encoder
-        e1 = self.encoder.layer1(z)
+        e1 = self.encoder.layer1(self.encoder.relu(self.encoder.bn1(self.encoder.conv1(z))))
         e2 = self.encoder.layer2(e1)
         e3 = self.encoder.layer3(e2)
         e4 = self.encoder.layer4(e3)
 
         # Decoder with skip connections
         d1 = self.decoder1(e4)
-        d1 = torch.cat([d1, e4], dim=1)
+        d1 = torch.cat([d1, e4], dim=1)  # Skip connection
 
         d2 = self.decoder2(d1)
-        d2 = torch.cat([d2, e3], dim=1)
+        d2 = torch.cat([d2, e3], dim=1)  # Skip connection
 
         d3 = self.decoder3(d2)
-        d3 = torch.cat([d3, e2], dim=1)
+        d3 = torch.cat([d3, e2], dim=1)  # Skip connection
 
         d4 = self.decoder4(d3)
-        d4 = torch.cat([d4, e1], dim=1)
+        d4 = torch.cat([d4, e1], dim=1)  # Skip connection
 
         # Heads
         logits = self.segmentation_head(d4)
         raw_depth = self.depth_head(d4)
 
+        # Resize outputs to match input spatial dimensions
         logits = torch.nn.functional.interpolate(logits, size=x.shape[2:], mode='bilinear', align_corners=False)
         raw_depth = torch.nn.functional.interpolate(raw_depth, size=x.shape[2:], mode='bilinear', align_corners=False)
 
