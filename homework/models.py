@@ -102,20 +102,25 @@ class Detector(torch.nn.Module):
         self.register_buffer("input_std", torch.as_tensor(INPUT_STD))
 
         # TODO: implement
-        self.encoder1 = self._conv_block(in_channels, 32)  # Layer 1
-        self.encoder2 = self._conv_block(32, 64)  # Layer 2
-        self.encoder3 = self._conv_block(64, 128)  # Layer 3
-        self.encoder4 = self._conv_block(128, 256)  # Layer 4
+        # Encoder (Downsampling Path)
+        self.encoder1 = self._conv_block(in_channels, 64)  # Layer 1
+        self.encoder2 = self._conv_block(64, 128)  # Layer 2
+        self.encoder3 = self._conv_block(128, 256)  # Layer 3
+        self.encoder4 = self._conv_block(256, 512)  # Layer 4
 
-        # Decoder (3 Upsampling Layers)
-        self.decoder1 = self._upconv_block(256, 128)  # Layer 1
-        self.decoder2 = self._upconv_block(128, 64)  # Layer 2
-        self.decoder3 = self._upconv_block(64, 32)  # Layer 3
+        # Bottleneck (Bridge between Encoder and Decoder)
+        self.bottleneck = self._conv_block(512, 1024)  # Bottleneck Layer
+
+        # Decoder (Upsampling Path with Skip Connections)
+        self.decoder1 = self._upconv_block(1024, 512)  # Layer 1
+        self.decoder2 = self._upconv_block(512, 256)  # Layer 2
+        self.decoder3 = self._upconv_block(256, 128)  # Layer 3
+        self.decoder4 = self._upconv_block(128, 64)  # Layer 4
 
         # Heads (Segmentation and Depth)
-        self.segmentation_head = nn.Conv2d(32, num_classes, kernel_size=1)  # Segmentation Head
-        self.depth_head = nn.Conv2d(32, 1, kernel_size=1)  # Depth Head
-    
+        self.segmentation_head = nn.Conv2d(64, num_classes, kernel_size=1)  # Segmentation Head
+        self.depth_head = nn.Conv2d(64, 1, kernel_size=1)  # Depth Head
+
     def _conv_block(self, in_channels, out_channels):
         return nn.Sequential(
             nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1),
@@ -130,7 +135,7 @@ class Detector(torch.nn.Module):
             nn.BatchNorm2d(out_channels),
             nn.ReLU()
         )
-    
+
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Used in training, takes an image and returns raw logits and raw depth.
@@ -148,27 +153,35 @@ class Detector(torch.nn.Module):
         z = (x - self.input_mean[None, :, None, None]) / self.input_std[None, :, None, None]
 
         # TODO: replace with actual forward pass
-        # Encoder (Downsampling)
+        # Encoder: down-sampling the spatial dimensions
+        # Encoder (Downsampling Path)
         e1 = self.encoder1(z)  # Layer 1
         e2 = self.encoder2(e1)  # Layer 2
         e3 = self.encoder3(e2)  # Layer 3
         e4 = self.encoder4(e3)  # Layer 4
 
-        # Decoder (Upsampling with Skip Connections)
-        d1 = self.decoder1(e4) + e3  # Layer 1
-        d2 = self.decoder2(d1) + e2  # Layer 2
-        d3 = self.decoder3(d2) + e1  # Layer 3
+        # Bottleneck
+        bottleneck = self.bottleneck(e4)
+
+        # Decoder (Upsampling Path with Skip Connections)
+        d1 = self.decoder1(bottleneck)  # Layer 1
+        d1 = torch.cat([d1, e4], dim=1)  # Skip Connection
+
+        d2 = self.decoder2(d1)  # Layer 2
+        d2 = torch.cat([d2, e3], dim=1)  # Skip Connection
+
+        d3 = self.decoder3(d2)  # Layer 3
+        d3 = torch.cat([d3, e2], dim=1)  # Skip Connection
+
+        d4 = self.decoder4(d3)  # Layer 4
+        d4 = torch.cat([d4, e1], dim=1)  # Skip Connection
 
         # Heads (Segmentation and Depth)
-        logits = self.segmentation_head(d3)  # Segmentation Head
-        raw_depth = self.depth_head(d3)  # Depth Head
-
-        # Resize logits and raw_depth to match input spatial dimensions
-        logits = torch.nn.functional.interpolate(logits, size=x.shape[2:], mode='bilinear', align_corners=False)
-        raw_depth = torch.nn.functional.interpolate(raw_depth, size=x.shape[2:], mode='bilinear', align_corners=False)
+        logits = self.segmentation_head(d4)  # Segmentation Head
+        raw_depth = self.depth_head(d4)  # Depth Head
 
         return logits, raw_depth
-
+    
     def predict(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Used for inference, takes an image and returns class labels and normalized depth.
