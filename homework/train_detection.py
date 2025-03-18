@@ -14,23 +14,29 @@ log_dir = str(HOMEWORK_DIR)
 os.makedirs(log_dir, exist_ok=True)
 
 def save_model(model, model_name, log_dir):
+    """Save the model's state_dict to the specified directory."""
     model_path = os.path.join(log_dir, f"{model_name}.th")
     torch.save(model.state_dict(), model_path)
     print(f"Model saved to {model_path}")
 
-# IoU Loss for Segmentation
-class IoULoss(nn.Module):
-    def __init__(self, smooth=1e-6):
-        super(IoULoss, self).__init__()
-        self.smooth = smooth
+# Focal Loss for Segmentation
+class FocalLoss(nn.Module):
+    def __init__(self, alpha=1, gamma=2, reduction='mean'):
+        super(FocalLoss, self).__init__()
+        self.alpha = alpha
+        self.gamma = gamma
+        self.reduction = reduction
 
     def forward(self, preds, targets):
-        preds = torch.softmax(preds, dim=1)
-        targets_one_hot = torch.nn.functional.one_hot(targets, num_classes=preds.shape[1]).permute(0, 3, 1, 2).float()
-        intersection = (preds * targets_one_hot).sum(dim=(2, 3))
-        union = preds.sum(dim=(2, 3)) + targets_one_hot.sum(dim=(2, 3)) - intersection
-        iou = (intersection + self.smooth) / (union + self.smooth)
-        return 1 - iou.mean()
+        ce_loss = nn.CrossEntropyLoss(reduction='none')(preds, targets)
+        pt = torch.exp(-ce_loss)
+        focal_loss = self.alpha * (1 - pt) ** self.gamma * ce_loss
+
+        if self.reduction == 'mean':
+            return focal_loss.mean()
+        elif self.reduction == 'sum':
+            return focal_loss.sum()
+        return focal_loss
 
 # Dice Loss for Segmentation
 class DiceLoss(nn.Module):
@@ -46,19 +52,19 @@ class DiceLoss(nn.Module):
         dice = (2 * intersection + self.smooth) / (union + self.smooth)
         return 1 - dice.mean()
 
-# Combined Segmentation Loss (IoU + Dice)
+# Combined Segmentation Loss (Focal + Dice)
 class CombinedSegmentationLoss(nn.Module):
-    def __init__(self, iou_weight=0.5, dice_weight=0.5):
+    def __init__(self, focal_weight=0.5, dice_weight=0.5):
         super(CombinedSegmentationLoss, self).__init__()
-        self.iou_loss = IoULoss()
+        self.focal_loss = FocalLoss()
         self.dice_loss = DiceLoss()
-        self.iou_weight = iou_weight
+        self.focal_weight = focal_weight
         self.dice_weight = dice_weight
 
     def forward(self, preds, targets):
-        iou_loss = self.iou_loss(preds, targets)
+        focal_loss = self.focal_loss(preds, targets)
         dice_loss = self.dice_loss(preds, targets)
-        return self.iou_weight * iou_loss + self.dice_weight * dice_loss
+        return self.focal_weight * focal_loss + self.dice_weight * dice_loss
 
 # Combined Depth Loss (L1 + MSE)
 class CombinedDepthLoss(nn.Module):
@@ -105,9 +111,9 @@ def train(model_name="detector", num_epoch=500, lr=1e-3, patience=10):
     # Data Augmentation
     train_transform = transforms.Compose([
         transforms.RandomHorizontalFlip(),
-        transforms.RandomRotation(30),  # Increased rotation
-        transforms.RandomResizedCrop((256, 256), scale=(0.7, 1.0)),  # Increased scale range
-        transforms.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.4),  # Increased jitter
+        transforms.RandomRotation(20),
+        transforms.RandomResizedCrop((256, 256), scale=(0.8, 1.0)),
+        transforms.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.3),
         transforms.ToTensor(),
     ])
     val_transform = transforms.Compose([
@@ -122,7 +128,7 @@ def train(model_name="detector", num_epoch=500, lr=1e-3, patience=10):
     model = Detector().to(device)
 
     # Loss functions
-    criterion_segmentation = CombinedSegmentationLoss(iou_weight=0.5, dice_weight=0.5)  # Combined IoU + Dice Loss
+    criterion_segmentation = CombinedSegmentationLoss(focal_weight=0.5, dice_weight=0.5)  # Combined Focal + Dice Loss
     criterion_depth = CombinedDepthLoss(l1_weight=0.8, mse_weight=0.2)
 
     # Optimizer with weight decay

@@ -102,7 +102,7 @@ class Detector(torch.nn.Module):
         self.register_buffer("input_std", torch.as_tensor(INPUT_STD))
 
         # TODO: implement
-           # Encoder
+        # Encoder
         self.encoder1 = self._conv_block(in_channels, 64)
         self.encoder2 = self._conv_block(64, 128)
         self.encoder3 = self._conv_block(128, 256)
@@ -152,7 +152,6 @@ class Detector(torch.nn.Module):
         z = (x - self.input_mean[None, :, None, None]) / self.input_std[None, :, None, None]
 
         # TODO: replace with actual forward pass
-        # Encoder: down-sampling the spatial dimensions
         # Encoder
         e1 = self.encoder1(z)
         e2 = self.encoder2(e1)
