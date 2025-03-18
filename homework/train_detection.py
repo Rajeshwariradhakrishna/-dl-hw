@@ -1,191 +1,180 @@
 import torch
-import torch.optim as optim
 import torch.nn as nn
-import os
-import numpy as np
-import matplotlib.pyplot as plt
+import torch.optim as optim
+import torch.nn.functional as F
+from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
-from homework.datasets.drive_dataset import load_data
-from models import Detector, HOMEWORK_DIR
-from torch.optim.lr_scheduler import CosineAnnealingLR
+import numpy as np
+from PIL import Image
 
-# Define log directory
-log_dir = str(HOMEWORK_DIR)
-os.makedirs(log_dir, exist_ok=True)
+# Define the U-Net architecture
+class UNet(nn.Module):
+    def __init__(self, in_channels=3, out_channels=1):
+        super(UNet, self).__init__()
+        
+        # Contracting path (Encoder)
+        self.encoder1 = self.conv_block(in_channels, 64)
+        self.encoder2 = self.conv_block(64, 128)
+        self.encoder3 = self.conv_block(128, 256)
+        self.encoder4 = self.conv_block(256, 512)
+        
+        # Bottleneck
+        self.bottleneck = self.conv_block(512, 1024)
+        
+        # Expanding path (Decoder)
+        self.decoder4 = self.conv_block(1024 + 512, 512)
+        self.decoder3 = self.conv_block(512 + 256, 256)
+        self.decoder2 = self.conv_block(256 + 128, 128)
+        self.decoder1 = self.conv_block(128 + 64, 64)
+        
+        # Final output layer
+        self.final = nn.Conv2d(64, out_channels, kernel_size=1)
 
-def save_model(model, model_name, log_dir):
-    """Save the model's state_dict to the specified directory."""
-    model_path = os.path.join(log_dir, f"{model_name}.th")
-    torch.save(model.state_dict(), model_path)
-    print(f"Model saved to {model_path}")
+    def conv_block(self, in_channels, out_channels):
+        return nn.Sequential(
+            nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True)
+        )
 
-# IoU Loss for Segmentation
-class IoULoss(nn.Module):
-    def __init__(self, smooth=1e-6):
-        super(IoULoss, self).__init__()
-        self.smooth = smooth
+    def forward(self, x):
+        # Encoder path
+        enc1 = self.encoder1(x)
+        enc2 = self.encoder2(F.max_pool2d(enc1, 2))
+        enc3 = self.encoder3(F.max_pool2d(enc2, 2))
+        enc4 = self.encoder4(F.max_pool2d(enc3, 2))
+        
+        # Bottleneck
+        bottleneck = self.bottleneck(F.max_pool2d(enc4, 2))
+        
+        # Decoder path (skip connections)
+        dec4 = self.decoder4(torch.cat([F.upsample(bottleneck, enc4.size()[2:]), enc4], 1))
+        dec3 = self.decoder3(torch.cat([F.upsample(dec4, enc3.size()[2:]), enc3], 1))
+        dec2 = self.decoder2(torch.cat([F.upsample(dec3, enc2.size()[2:]), enc2], 1))
+        dec1 = self.decoder1(torch.cat([F.upsample(dec2, enc1.size()[2:]), enc1], 1))
+        
+        # Output layer
+        out = self.final(dec1)
+        return out
 
-    def forward(self, preds, targets):
-        preds = torch.softmax(preds, dim=1)
-        targets_one_hot = torch.nn.functional.one_hot(targets, num_classes=preds.shape[1]).permute(0, 3, 1, 2).float()
-        intersection = (preds * targets_one_hot).sum(dim=(2, 3))
-        union = preds.sum(dim=(2, 3)) + targets_one_hot.sum(dim=(2, 3)) - intersection
-        iou = (intersection + self.smooth) / (union + self.smooth)
-        return 1 - iou.mean()
+# Set device
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# Combined Depth Loss (L1 + MSE)
-class CombinedDepthLoss(nn.Module):
-    def __init__(self, l1_weight=0.8, mse_weight=0.2):
-        super(CombinedDepthLoss, self).__init__()
-        self.l1_loss = nn.L1Loss()
-        self.mse_loss = nn.MSELoss()
-        self.l1_weight = l1_weight
-        self.mse_weight = mse_weight
+# Model, loss function and optimizer
+model = UNet(in_channels=3, out_channels=1).to(device)
+criterion = nn.BCEWithLogitsLoss()  # For binary segmentation
+optimizer = optim.Adam(model.parameters(), lr=0.001)
 
-    def forward(self, preds, targets):
-        l1_loss = self.l1_loss(preds, targets)
-        mse_loss = self.mse_loss(preds, targets)
-        return self.l1_weight * l1_loss + self.mse_weight * mse_loss
+# IOU Calculation function
+def calculate_iou(pred, target, threshold=0.5):
+    pred = (torch.sigmoid(pred) > threshold).float()
+    intersection = torch.sum(pred * target)
+    union = torch.sum(pred) + torch.sum(target) - intersection
+    iou = intersection / union
+    return iou.item()
 
-# Visualize Predictions
-def visualize_predictions(model, val_loader, device):
-    model.eval()
-    with torch.no_grad():
-        for batch in val_loader:
-            images = batch['image'].to(device)
-            segmentation_labels = batch['track'].to(device).long()
-            segmentation_pred, _ = model(images)
-            segmentation_pred = torch.argmax(segmentation_pred, dim=1)
+# DataLoader and Dataset
+class SegmentationDataset(Dataset):
+    def __init__(self, image_paths, mask_paths, transform=None):
+        self.image_paths = image_paths
+        self.mask_paths = mask_paths
+        self.transform = transform
 
-            # Plot images, ground truth, and predictions
-            plt.figure(figsize=(10, 5))
-            plt.subplot(1, 3, 1)
-            plt.imshow(images[0].cpu().permute(1, 2, 0))
-            plt.title("Image")
-            plt.subplot(1, 3, 2)
-            plt.imshow(segmentation_labels[0].cpu(), cmap="jet")
-            plt.title("Ground Truth")
-            plt.subplot(1, 3, 3)
-            plt.imshow(segmentation_pred[0].cpu(), cmap="jet")
-            plt.title("Prediction")
-            plt.show()
-            break
+    def __len__(self):
+        return len(self.image_paths)
 
-# Training Function
-def train(model_name="detector", num_epoch=50, lr=1e-3, patience=10):
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    def __getitem__(self, idx):
+        image = Image.open(self.image_paths[idx]).convert('RGB')
+        mask = Image.open(self.mask_paths[idx]).convert('1')  # 1 for binary masks
+        
+        if self.transform:
+            image = self.transform(image)
+            mask = self.transform(mask)
 
-    # Data Augmentation
-    train_transform = transforms.Compose([
-        transforms.RandomHorizontalFlip(),
-        transforms.RandomRotation(20),
-        transforms.RandomResizedCrop((256, 256), scale=(0.8, 1.0)),
-        transforms.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.3),
-        transforms.ToTensor(),
-    ])
-    val_transform = transforms.Compose([
-        transforms.ToTensor(),
-    ])
+        return image, mask
 
-    # Load dataset with augmentations
-    train_loader = load_data("drive_data/train")
-    val_loader = load_data("drive_data/val")
+# Image transformation (resize, normalize, etc.)
+transform = transforms.Compose([
+    transforms.Resize((256, 256)),
+    transforms.ToTensor(),
+])
 
-    # Initialize model
-    model = Detector().to(device)
+# Assuming you have lists of image and mask file paths
+train_images = ['path_to_train_image1.jpg', 'path_to_train_image2.jpg']  # List of image paths
+train_masks = ['path_to_train_mask1.png', 'path_to_train_mask2.png']  # List of mask paths
+val_images = ['path_to_val_image1.jpg', 'path_to_val_image2.jpg']  # List of validation image paths
+val_masks = ['path_to_val_mask1.png', 'path_to_val_mask2.png']  # List of validation mask paths
 
-    # Loss functions
-    criterion_segmentation = IoULoss()  # Use IoU Loss for segmentation
-    criterion_depth = CombinedDepthLoss(l1_weight=0.8, mse_weight=0.2)
+# Create Dataset and DataLoader for train and validation
+train_dataset = SegmentationDataset(train_images, train_masks, transform=transform)
+val_dataset = SegmentationDataset(val_images, val_masks, transform=transform)
 
-    # Optimizer with weight decay
-    optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
-    scheduler = CosineAnnealingLR(optimizer, T_max=num_epoch, eta_min=1e-5)
+train_loader = DataLoader(train_dataset, batch_size=4, shuffle=True)
+val_loader = DataLoader(val_dataset, batch_size=4, shuffle=False)
 
-    # Training loop
-    best_val_loss = float('inf')
-    epochs_no_improve = 0
-
-    for epoch in range(num_epoch):
+# Training Loop
+def train(model, train_loader, val_loader, epochs=10):
+    best_val_iou = 0
+    for epoch in range(epochs):
         model.train()
-        total_train_loss, total_train_iou, total_train_depth_error = 0, 0, 0
-
-        for batch in train_loader:
-            images = batch['image'].to(device)
-            segmentation_labels = batch['track'].to(device).long()
-            depth_labels = batch['depth'].to(device).unsqueeze(1)
-
+        train_loss = 0
+        train_iou = 0
+        for data in train_loader:
+            inputs, labels = data
+            inputs, labels = inputs.to(device), labels.to(device)
+            
+            # Zero gradients
             optimizer.zero_grad()
-            segmentation_pred, depth_pred = model(images)
-
-            loss_segmentation = criterion_segmentation(segmentation_pred, segmentation_labels)
-            loss_depth = criterion_depth(depth_pred, depth_labels)
-            loss = loss_segmentation + loss_depth
-
-            if torch.isnan(loss).any():
-                print("NaN detected in loss. Stopping training.")
-                return
-
+            
+            # Forward pass
+            outputs = model(inputs)
+            
+            # Calculate loss
+            loss = criterion(outputs, labels)
+            train_loss += loss.item()
+            
+            # IOU calculation
+            iou = calculate_iou(outputs, labels)
+            train_iou += iou
+        
+            # Backward pass and optimization
             loss.backward()
             optimizer.step()
 
-            # Compute IoU
-            iou_value = (1 - loss_segmentation).item()
-            depth_error = loss_depth.item()
+        train_loss /= len(train_loader)
+        train_iou /= len(train_loader)
+        
+        print(f"Epoch [{epoch+1}/{epochs}], Train Loss: {train_loss:.4f}, Train IoU: {train_iou:.4f}")
 
-            total_train_loss += loss.item()
-            total_train_iou += iou_value
-            total_train_depth_error += depth_error
-
-        avg_train_loss = total_train_loss / len(train_loader)
-        avg_train_iou = total_train_iou / len(train_loader)
-        avg_train_depth_error = total_train_depth_error / len(train_loader)
-        print(f"Epoch [{epoch + 1}/{num_epoch}] - Train Loss: {avg_train_loss:.4f}, Train IoU: {avg_train_iou:.4f}, Train Depth Error: {avg_train_depth_error:.4f}")
-
-        # Validation
+        # Validation loop
         model.eval()
-        total_val_loss, total_val_iou, total_val_depth_error = 0, 0, 0
-
+        val_loss = 0
+        val_iou = 0
         with torch.no_grad():
-            for batch in val_loader:
-                images = batch['image'].to(device)
-                segmentation_labels = batch['track'].to(device).long()
-                depth_labels = batch['depth'].to(device).unsqueeze(1)
+            for data in val_loader:
+                inputs, labels = data
+                inputs, labels = inputs.to(device), labels.to(device)
 
-                segmentation_pred, depth_pred = model(images)
+                # Forward pass
+                outputs = model(inputs)
+                loss = criterion(outputs, labels)
+                val_loss += loss.item()
 
-                loss_segmentation = criterion_segmentation(segmentation_pred, segmentation_labels)
-                loss_depth = criterion_depth(depth_pred, depth_labels)
-                loss = loss_segmentation + loss_depth
+                # IOU calculation
+                iou = calculate_iou(outputs, labels)
+                val_iou += iou
 
-                iou_value = (1 - loss_segmentation).item()
-                depth_error = loss_depth.item()
+        val_loss /= len(val_loader)
+        val_iou /= len(val_loader)
 
-                total_val_loss += loss.item()
-                total_val_iou += iou_value
-                total_val_depth_error += depth_error
+        print(f"Epoch [{epoch+1}/{epochs}], Val Loss: {val_loss:.4f}, Val IoU: {val_iou:.4f}")
+        
+        # Save the model if the IoU improves
+        if val_iou > best_val_iou:
+            best_val_iou = val_iou
+            torch.save(model.state_dict(), "best_unet_model.pth")
+            print("Model saved!")
 
-        avg_val_loss = total_val_loss / len(val_loader)
-        avg_val_iou = total_val_iou / len(val_loader)
-        avg_val_depth_error = total_val_depth_error / len(val_loader)
-        print(f"Epoch [{epoch + 1}/{num_epoch}] - Val Loss: {avg_val_loss:.4f}, Val IoU: {avg_val_iou:.4f}, Val Depth Error: {avg_val_depth_error:.4f}")
-
-        # Check for improvement
-        if avg_val_loss < best_val_loss:
-            best_val_loss = avg_val_loss
-            epochs_no_improve = 0
-            save_model(model, model_name, log_dir)
-        else:
-            epochs_no_improve += 1
-            if epochs_no_improve >= patience:
-                print(f"Early stopping at epoch {epoch + 1} with best validation loss: {best_val_loss:.4f}")
-                break
-
-        scheduler.step()
-
-    # Visualize predictions after training
-    visualize_predictions(model, val_loader, device)
-    print("Training complete!")
-
-if __name__ == "__main__":
-    train(model_name="detector", num_epoch=50, lr=1e-3, patience=10)
+# Start training (make sure data loaders are ready)
+train(model, train_loader, val_loader, epochs=10)
