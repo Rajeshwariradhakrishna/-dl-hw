@@ -8,6 +8,7 @@ from torchvision import transforms
 from homework.datasets.drive_dataset import load_data
 from models import Detector, HOMEWORK_DIR
 from torch.optim.lr_scheduler import CosineAnnealingLR
+from torch.cuda.amp import GradScaler, autocast
 
 # Define log directory
 log_dir = str(HOMEWORK_DIR)
@@ -88,7 +89,9 @@ def visualize_predictions(model, val_loader, device):
 
 # Training Function
 def train(model_name="detector", num_epoch=50, lr=1e-3, patience=10):
+    # Check if GPU is available
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Using device: {device}")
 
     # Data Augmentation
     train_transform = transforms.Compose([
@@ -104,11 +107,11 @@ def train(model_name="detector", num_epoch=50, lr=1e-3, patience=10):
 
     # Load dataset with augmentations
     print("Loading training data...")
-    train_loader = load_data("drive_data/train")
+    train_loader = load_data("drive_data/train", transform=train_transform, num_workers=4, pin_memory=True, batch_size=16)
     print(f"Loaded {len(train_loader.dataset)} training samples.")
 
     print("Loading validation data...")
-    val_loader = load_data("drive_data/val")
+    val_loader = load_data("drive_data/val", transform=val_transform, num_workers=4, pin_memory=True, batch_size=16)
     print(f"Loaded {len(val_loader.dataset)} validation samples.")
 
     # Check a sample batch
@@ -129,6 +132,9 @@ def train(model_name="detector", num_epoch=50, lr=1e-3, patience=10):
     optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
     scheduler = CosineAnnealingLR(optimizer, T_max=num_epoch, eta_min=1e-5)
 
+    # Mixed precision training
+    scaler = GradScaler()
+
     # Metrics
     train_metrics = {"iou": [], "depth_error": []}
     val_metrics = {"iou": [], "depth_error": []}
@@ -144,23 +150,23 @@ def train(model_name="detector", num_epoch=50, lr=1e-3, patience=10):
 
         print(f"Starting epoch {epoch + 1}/{num_epoch}...")
         for batch_idx, batch in enumerate(train_loader):
-            images = batch['image'].to(device)
-            segmentation_labels = batch['track'].to(device).long()
-            depth_labels = batch['depth'].to(device).unsqueeze(1)
+            images = batch['image'].to(device, non_blocking=True)
+            segmentation_labels = batch['track'].to(device, non_blocking=True).long()
+            depth_labels = batch['depth'].to(device, non_blocking=True).unsqueeze(1)
 
             optimizer.zero_grad()
-            segmentation_pred, depth_pred = model(images)
 
-            loss_segmentation = criterion_segmentation(segmentation_pred, segmentation_labels)
-            loss_depth = criterion_depth(depth_pred, depth_labels)
-            loss = loss_segmentation + loss_depth
+            # Forward pass with mixed precision
+            with autocast():
+                segmentation_pred, depth_pred = model(images)
+                loss_segmentation = criterion_segmentation(segmentation_pred, segmentation_labels)
+                loss_depth = criterion_depth(depth_pred, depth_labels)
+                loss = loss_segmentation + loss_depth
 
-            if torch.isnan(loss).any():
-                print("NaN detected in loss. Stopping training.")
-                return
-
-            loss.backward()
-            optimizer.step()
+            # Backward pass with scaling
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
 
             # Update confusion matrix
             confusion_matrix.update(segmentation_pred, segmentation_labels)
@@ -180,9 +186,9 @@ def train(model_name="detector", num_epoch=50, lr=1e-3, patience=10):
         print("Running validation...")
         with torch.no_grad():
             for batch_idx, batch in enumerate(val_loader):
-                images = batch['image'].to(device)
-                segmentation_labels = batch['track'].to(device).long()
-                depth_labels = batch['depth'].to(device).unsqueeze(1)
+                images = batch['image'].to(device, non_blocking=True)
+                segmentation_labels = batch['track'].to(device, non_blocking=True).long()
+                depth_labels = batch['depth'].to(device, non_blocking=True).unsqueeze(1)
 
                 segmentation_pred, depth_pred = model(images)
 
