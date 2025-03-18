@@ -103,17 +103,17 @@ class Detector(torch.nn.Module):
 
         # TODO: implement
         # Encoder
-        self.encoder1 = self._conv_block(in_channels, 32)
-        self.encoder2 = self._conv_block(32, 64)
-        self.encoder3 = self._conv_block(64, 128)
-        self.encoder4 = self._conv_block(128, 256)
+        self.encoder1 = self._conv_block(in_channels, 32)  # Layer 1
+        self.encoder2 = self._conv_block(32, 64)  # Layer 2
+        self.encoder3 = self._conv_block(64, 128)  # Layer 3
+        self.encoder4 = self._conv_block(128, 256)  # Layer 4
 
-        # Decoder with skip connections
-        self.decoder2 = self._upconv_block(256, 128)
-        self.decoder3 = self._upconv_block(128, 64)
-        self.decoder4 = self._upconv_block(64, 32)
+        # Decoder (3 Upsampling Layers)
+        self.decoder1 = self._upconv_block(256, 128)  # Layer 1
+        self.decoder2 = self._upconv_block(128, 64)  # Layer 2
+        self.decoder3 = self._upconv_block(64, 32)  # Layer 3
 
-        # Segmentation Head
+        # Heads (Segmentation and Depth)
         self.segmentation_head = nn.Conv2d(32, num_classes, kernel_size=1)  # Segmentation Head
         self.depth_head = nn.Conv2d(32, 1, kernel_size=1)  # Depth Head
     
@@ -131,7 +131,7 @@ class Detector(torch.nn.Module):
             nn.BatchNorm2d(out_channels),
             nn.ReLU()
         )
-
+    
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Used in training, takes an image and returns raw logits and raw depth.
@@ -149,23 +149,22 @@ class Detector(torch.nn.Module):
         z = (x - self.input_mean[None, :, None, None]) / self.input_std[None, :, None, None]
 
         # TODO: replace with actual forward pass
-        # Encoder: down-sampling the spatial dimensions
-        e1 = self.encoder1(z)
-        e2 = self.encoder2(e1)
-        e3 = self.encoder3(e2)
-        e4 = self.encoder4(e3)
+        # Encoder (Downsampling)
+        e1 = self.encoder1(z)  # Layer 1
+        e2 = self.encoder2(e1)  # Layer 2
+        e3 = self.encoder3(e2)  # Layer 3
+        e4 = self.encoder4(e3)  # Layer 4
 
         # Decoder (Upsampling with Skip Connections)
-        d1 = self.decoder1(e4) + e3
-        d2 = self.decoder2(d1) + e2
-        d3 = self.decoder3(d2) + e1
+        d1 = self.decoder1(e4) + e3  # Layer 1
+        d2 = self.decoder2(d1) + e2  # Layer 2
+        d3 = self.decoder3(d2) + e1  # Layer 3
 
         # Heads (Segmentation and Depth)
-        logits = self.segmentation_head(d3)
-        raw_depth = self.depth_head(d3)
+        logits = self.segmentation_head(d3)  # Segmentation Head
+        raw_depth = self.depth_head(d3)  # Depth Head
 
         return logits, raw_depth
-
 
     def predict(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """
