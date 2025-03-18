@@ -103,23 +103,23 @@ class Detector(torch.nn.Module):
 
         # TODO: implement
         # Encoder (Downsampling Path)
-        self.encoder1 = self._conv_block(in_channels, 64)  # Layer 1
-        self.encoder2 = self._conv_block(64, 128)  # Layer 2
-        self.encoder3 = self._conv_block(128, 256)  # Layer 3
-        self.encoder4 = self._conv_block(256, 512)  # Layer 4
+        self.encoder1 = self._conv_block(in_channels, 32)  # Layer 1
+        self.encoder2 = self._conv_block(32, 64)  # Layer 2
+        self.encoder3 = self._conv_block(64, 128)  # Layer 3
+        self.encoder4 = self._conv_block(128, 256)  # Layer 4
 
         # Bottleneck (Bridge between Encoder and Decoder)
-        self.bottleneck = self._conv_block(512, 1024)  # Bottleneck Layer
+        self.bottleneck = self._conv_block(256, 512)  # Bottleneck Layer
 
         # Decoder (Upsampling Path with Skip Connections)
-        self.decoder1 = self._upconv_block(1024, 512)  # Layer 1
-        self.decoder2 = self._upconv_block(1024, 256)  # Layer 2 (1024 = 512 + 512 from skip connection)
-        self.decoder3 = self._upconv_block(512, 128)  # Layer 3 (512 = 256 + 256 from skip connection)
-        self.decoder4 = self._upconv_block(256, 64)  # Layer 4 (256 = 128 + 128 from skip connection)
+        self.decoder1 = self._upconv_block(512, 256)  # Layer 1
+        self.decoder2 = self._upconv_block(512, 128)  # Layer 2 (512 = 256 + 256 from skip connection)
+        self.decoder3 = self._upconv_block(256, 64)  # Layer 3 (256 = 128 + 128 from skip connection)
+        self.decoder4 = self._upconv_block(128, 32)  # Layer 4 (128 = 64 + 64 from skip connection)
 
         # Heads (Segmentation and Depth)
-        self.segmentation_head = nn.Conv2d(128, num_classes, kernel_size=1)  # Segmentation Head
-        self.depth_head = nn.Conv2d(128, 1, kernel_size=1)  # Depth Head
+        self.segmentation_head = nn.Conv2d(64, num_classes, kernel_size=1)  # Segmentation Head
+        self.depth_head = nn.Conv2d(64, 1, kernel_size=1)  # Depth Head
 
     def _conv_block(self, in_channels, out_channels):
         return nn.Sequential(
@@ -164,16 +164,16 @@ class Detector(torch.nn.Module):
 
         # Decoder (Upsampling Path with Skip Connections)
         d1 = self.decoder1(bottleneck)  # Layer 1
-        d1 = torch.cat([d1, e4], dim=1)  # Skip Connection (512 + 512 = 1024 channels)
+        d1 = torch.cat([d1, e4], dim=1)  # Skip Connection (256 + 256 = 512 channels)
 
         d2 = self.decoder2(d1)  # Layer 2
-        d2 = torch.cat([d2, e3], dim=1)  # Skip Connection (256 + 256 = 512 channels)
+        d2 = torch.cat([d2, e3], dim=1)  # Skip Connection (128 + 128 = 256 channels)
 
         d3 = self.decoder3(d2)  # Layer 3
-        d3 = torch.cat([d3, e2], dim=1)  # Skip Connection (128 + 128 = 256 channels)
+        d3 = torch.cat([d3, e2], dim=1)  # Skip Connection (64 + 64 = 128 channels)
 
         d4 = self.decoder4(d3)  # Layer 4
-        d4 = torch.cat([d4, e1], dim=1)  # Skip Connection (64 + 64 = 128 channels)
+        d4 = torch.cat([d4, e1], dim=1)  # Skip Connection (32 + 32 = 64 channels)
 
         # Heads (Segmentation and Depth)
         logits = self.segmentation_head(d4)  # Segmentation Head
