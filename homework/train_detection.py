@@ -13,6 +13,9 @@ from torch.optim.lr_scheduler import CosineAnnealingLR
 log_dir = str(HOMEWORK_DIR)
 os.makedirs(log_dir, exist_ok=True)
 
+# Debug: Print HOMEWORK_DIR
+print(f"HOMEWORK_DIR: {HOMEWORK_DIR}")
+
 
 def save_model(model, model_name, log_dir):
     model_path = os.path.join(log_dir, f"{model_name}.th")
@@ -211,6 +214,15 @@ def train(model_name="detector", num_epoch=50, lr=1e-3, patience=10):
                 break
 
         scheduler.step()
+
+    # Manually save the model after training
+    save_model(model, "detector", log_dir)
+
+    # Debug: Check if the file exists
+    if os.path.exists(os.path.join(HOMEWORK_DIR, "detector.th")):
+        print("detector.th file exists!")
+    else:
+        print("detector.th file is missing!")
 
     print("Training complete!")
 
