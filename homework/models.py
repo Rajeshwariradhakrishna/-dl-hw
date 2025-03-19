@@ -68,9 +68,9 @@ class Detector(torch.nn.Module):
         self.decoder4 = self._upconv_block(64 + 64, 32)    # (B, 32, H, W)
 
         # Attention Mechanism (Squeeze-and-Excitation)
-        self.se1 = self._se_block(256)
-        self.se2 = self._se_block(128)
-        self.se3 = self._se_block(64)
+        self.se1 = self._se_block(256)  # For e3 (256 channels)
+        self.se2 = self._se_block(128)  # For e2 (128 channels)
+        self.se3 = self._se_block(64)   # For e1 (64 channels)
 
         # Segmentation Head
         self.segmentation_conv = nn.Conv2d(32, num_classes, kernel_size=1)  # (B, num_classes, H, W)
@@ -95,11 +95,12 @@ class Detector(torch.nn.Module):
 
     def _se_block(self, channels, reduction=16):
         return nn.Sequential(
-            nn.AdaptiveAvgPool2d(1),
-            nn.Conv2d(channels, channels // reduction, kernel_size=1),
-            nn.ReLU(),
-            nn.Conv2d(channels // reduction, channels, kernel_size=1),
-            nn.Sigmoid()
+            nn.AdaptiveAvgPool2d(1),  # Squeeze: Global average pooling to reduce spatial dimensions to 1x1
+            nn.Conv2d(channels, channels // reduction, kernel_size=1),  # Excitation: First FC layer (1x1 convolution)
+            nn.ReLU(),  # Activation
+            nn.Conv2d(channels // reduction, channels, kernel_size=1),  # Excitation: Second FC layer (1x1 convolution)
+            nn.Sigmoid(),  # Sigmoid activation to produce channel-wise scaling factors
+            nn.Upsample(scale_factor=2, mode='bilinear', align_corners=False)  # Upsample to match spatial dimensions
         )
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
