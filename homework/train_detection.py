@@ -1,13 +1,13 @@
 import torch
 import torch.optim as optim
 import torch.nn as nn
+import torch.nn.functional as F
 import os
 import matplotlib.pyplot as plt
 from torchvision import transforms
 from homework.datasets.drive_dataset import load_data
 from homework.models import Detector, HOMEWORK_DIR
 from torch.optim.lr_scheduler import CosineAnnealingLR
-import torch.nn.functional as F
 
 # Define log directory
 log_dir = str(HOMEWORK_DIR)
@@ -76,7 +76,7 @@ class CombinedLoss(nn.Module):
     def __init__(self, seg_weight=0.4, depth_weight=0.2, iou_weight=0.3, grad_weight=0.1):
         super(CombinedLoss, self).__init__()
         self.seg_loss = FocalLoss()  # Use Focal Loss for segmentation
-        self.depth_loss = nn.L1Loss()
+        self.depth_loss = nn.HuberLoss()  # Use Huber Loss for depth
         self.iou_loss = DiceLoss()  # Use Dice Loss for IoU
         self.grad_loss = GradientLoss()
         self.seg_weight = seg_weight
@@ -116,7 +116,7 @@ def visualize_predictions(image, segmentation_pred, depth_pred):
 
 
 # Training Function
-def train(model_name="detector", num_epoch=150, lr=1e-3, patience=20):
+def train(model_name="detector", num_epoch=50, lr=1e-3, patience=10):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # Load dataset
@@ -130,7 +130,7 @@ def train(model_name="detector", num_epoch=150, lr=1e-3, patience=20):
     criterion = CombinedLoss(seg_weight=0.4, depth_weight=0.2, iou_weight=0.3, grad_weight=0.1)
 
     # Optimizer with weight decay
-    optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
+    optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-3)  # Increased weight decay
     scheduler = CosineAnnealingLR(optimizer, T_max=num_epoch)
 
     # Training loop
@@ -175,44 +175,3 @@ def train(model_name="detector", num_epoch=150, lr=1e-3, patience=20):
         # Validation
         model.eval()
         total_val_loss, total_val_iou, total_val_depth_error = 0, 0, 0
-
-        with torch.no_grad():
-            for batch in val_loader:
-                images = batch['image'].to(device)
-                segmentation_labels = batch['track'].to(device).long()
-                depth_labels = batch['depth'].to(device).unsqueeze(1)
-
-                segmentation_pred, depth_pred = model(images)
-
-                loss = criterion(segmentation_pred, depth_pred, segmentation_labels, depth_labels)
-
-                iou_value = (1 - criterion.iou_loss(segmentation_pred, segmentation_labels)).item()
-                depth_error = criterion.depth_loss(depth_pred, depth_labels).item()
-
-                total_val_loss += loss.item()
-                total_val_iou += iou_value
-                total_val_depth_error += depth_error
-
-        avg_val_loss = total_val_loss / len(val_loader)
-        avg_val_iou = total_val_iou / len(val_loader)
-        avg_val_depth_error = total_val_depth_error / len(val_loader)
-        print(f"Epoch [{epoch + 1}/{num_epoch}] - Val Loss: {avg_val_loss:.4f}, Val IoU: {avg_val_iou:.4f}, Val Depth Error: {avg_val_depth_error:.4f}")
-
-        # Check for improvement
-        if avg_val_loss < best_val_loss:
-            best_val_loss = avg_val_loss
-            epochs_no_improve = 0
-            save_model(model, model_name, log_dir)
-        else:
-            epochs_no_improve += 1
-            if epochs_no_improve >= patience:
-                print(f"Early stopping at epoch {epoch + 1} with best validation loss: {best_val_loss:.4f}")
-                break
-
-        scheduler.step()
-
-    print("Training complete!")
-
-
-if __name__ == "__main__":
-    train(model_name="detector", num_epoch=150, lr=1e-3, patience=20)
