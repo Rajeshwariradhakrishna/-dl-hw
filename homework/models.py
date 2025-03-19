@@ -95,13 +95,13 @@ class Detector(torch.nn.Module):
 
     def _se_block(self, channels, reduction=16):
         return nn.Sequential(
-            nn.AdaptiveAvgPool2d(1),  # Squeeze: Global average pooling to reduce spatial dimensions to 1x1
-            nn.Conv2d(channels, channels // reduction, kernel_size=1),  # Excitation: First FC layer (1x1 convolution)
-            nn.ReLU(),  # Activation
-            nn.Conv2d(channels // reduction, channels, kernel_size=1),  # Excitation: Second FC layer (1x1 convolution)
-            nn.Sigmoid(),  # Sigmoid activation to produce channel-wise scaling factors
-            nn.Upsample(scale_factor=12, mode='bilinear', align_corners=False)  # Upsample to match spatial dimensions
-        )
+        nn.AdaptiveAvgPool2d(1),  # Squeeze: Global average pooling to reduce spatial dimensions to 1x1
+        nn.Conv2d(channels, channels // reduction, kernel_size=1),  # Excitation: First FC layer (1x1 convolution)
+        nn.ReLU(),  # Activation
+        nn.Conv2d(channels // reduction, channels, kernel_size=1),  # Excitation: Second FC layer (1x1 convolution)
+        nn.Sigmoid(),  # Sigmoid activation to produce channel-wise scaling factors
+        nn.Upsample(scale_factor=12, mode='bilinear', align_corners=False)  # Upsample to match spatial dimensions
+    )
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         # Normalize input
