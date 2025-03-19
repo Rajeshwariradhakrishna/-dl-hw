@@ -100,7 +100,7 @@ class Detector(torch.nn.Module):
             nn.ReLU(),  # Activation
             nn.Conv2d(channels // reduction, channels, kernel_size=1),  # Excitation: Second FC layer (1x1 convolution)
             nn.Sigmoid(),  # Sigmoid activation to produce channel-wise scaling factors
-            nn.Upsample(scale_factor=2, mode='bilinear', align_corners=False)  # Upsample to match spatial dimensions
+            nn.Upsample(scale_factor=6, mode='bilinear', align_corners=False)  # Upsample to match spatial dimensions
         )
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
@@ -136,7 +136,6 @@ class Detector(torch.nn.Module):
         pred = logits.argmax(dim=1)  # (B, H, W)
         depth = raw_depth.squeeze(1)  # (B, H, W)
         return pred, depth
-
 
 MODEL_FACTORY = {
     "classifier": Classifier,
