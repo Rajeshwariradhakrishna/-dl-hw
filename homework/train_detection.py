@@ -40,6 +40,9 @@ class GradientLoss(nn.Module):
         super(GradientLoss, self).__init__()
 
     def forward(self, preds, targets):
+        # Add a dummy channel dimension to targets
+        targets = targets.unsqueeze(1).float()  # (B, H, W) -> (B, 1, H, W)
+
         # Compute gradients for predictions and targets
         preds_grad_x = torch.abs(torch.gradient(preds, dim=2)[0])  # Gradient along height (dim=2)
         preds_grad_y = torch.abs(torch.gradient(preds, dim=3)[0])  # Gradient along width (dim=3)
