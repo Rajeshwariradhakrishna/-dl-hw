@@ -57,19 +57,21 @@ class DiceLoss(nn.Module):
 class GradientLoss(nn.Module):
     def __init__(self):
         super(GradientLoss, self).__init__()
+        self.sobel_x = torch.tensor([[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]], dtype=torch.float32).view(1, 1, 3, 3)
+        self.sobel_y = torch.tensor([[-1, -2, -1], [0, 0, 0], [1, 2, 1]], dtype=torch.float32).view(1, 1, 3, 3)
 
     def forward(self, preds, targets):
         # Add a dummy channel dimension to targets
         targets = targets.unsqueeze(1).float()  # (B, H, W) -> (B, 1, H, W)
 
         # Compute gradients for predictions and targets
-        preds_grad_x = torch.abs(torch.gradient(preds, dim=2)[0])  # Gradient along height (dim=2)
-        preds_grad_y = torch.abs(torch.gradient(preds, dim=3)[0])  # Gradient along width (dim=3)
-        preds_grad = preds_grad_x + preds_grad_y  # Combine gradients
+        preds_grad_x = F.conv2d(preds, self.sobel_x.to(preds.device), padding=1)
+        preds_grad_y = F.conv2d(preds, self.sobel_y.to(preds.device), padding=1)
+        preds_grad = torch.sqrt(preds_grad_x ** 2 + preds_grad_y ** 2)
 
-        targets_grad_x = torch.abs(torch.gradient(targets, dim=2)[0])  # Gradient along height (dim=2)
-        targets_grad_y = torch.abs(torch.gradient(targets, dim=3)[0])  # Gradient along width (dim=3)
-        targets_grad = targets_grad_x + targets_grad_y  # Combine gradients
+        targets_grad_x = F.conv2d(targets, self.sobel_x.to(targets.device), padding=1)
+        targets_grad_y = F.conv2d(targets, self.sobel_y.to(targets.device), padding=1)
+        targets_grad = torch.sqrt(targets_grad_x ** 2 + targets_grad_y ** 2)
 
         # Compute gradient loss
         return torch.mean(torch.abs(preds_grad - targets_grad))
