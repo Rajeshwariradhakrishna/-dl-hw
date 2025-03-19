@@ -66,18 +66,11 @@ class Detector(torch.nn.Module):
         self.decoder2 = self._upconv_block(128 + 128, 64)  # (B, 64, H/2, W/2)
         self.decoder3 = self._upconv_block(64 + 64, 32)    # (B, 32, H, W)
 
-        # Final upsampling to original resolution
-        self.final_upsample = nn.Sequential(
-            nn.ConvTranspose2d(32, 32, kernel_size=2, stride=2),  # (B, 32, H*2, W*2)
-            nn.BatchNorm2d(32),
-            nn.ReLU()
-        )
-
         # Segmentation Head
-        self.segmentation_conv = nn.Conv2d(32, num_classes, kernel_size=1)  # (B, num_classes, H*2, W*2)
+        self.segmentation_conv = nn.Conv2d(32, num_classes, kernel_size=1)  # (B, num_classes, H, W)
 
         # Depth Head
-        self.depth_conv = nn.Conv2d(32, 1, kernel_size=1)  # (B, 1, H*2, W*2)
+        self.depth_conv = nn.Conv2d(32, 1, kernel_size=1)  # (B, 1, H, W)
 
     def _conv_block(self, in_channels, out_channels):
         return nn.Sequential(
@@ -112,19 +105,16 @@ class Detector(torch.nn.Module):
 
         d3 = self.decoder3(d2)  # (B, 32, H, W)
 
-        # Final upsampling to original resolution
-        d4 = self.final_upsample(d3)  # (B, 32, H*2, W*2)
-
         # Segmentation and Depth Heads
-        logits = self.segmentation_conv(d4)  # (B, num_classes, H*2, W*2)
-        raw_depth = self.depth_conv(d4)  # (B, 1, H*2, W*2)
+        logits = self.segmentation_conv(d3)  # (B, num_classes, H, W)
+        raw_depth = self.depth_conv(d3)  # (B, 1, H, W)
 
         return logits, raw_depth
 
     def predict(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         logits, raw_depth = self(x)
-        pred = logits.argmax(dim=1)  # (B, H*2, W*2)
-        depth = raw_depth.squeeze(1)  # (B, H*2, W*2)
+        pred = logits.argmax(dim=1)  # (B, H, W)
+        depth = raw_depth.squeeze(1)  # (B, H, W)
         return pred, depth
 
 MODEL_FACTORY = {
