@@ -114,8 +114,8 @@ def train(model_name="detector", num_epoch=50, lr=1e-3, patience=10):
     model = Detector().to(device)
 
     # Loss functions
-    criterion_segmentation = CombinedSegmentationLoss(iou_weight=0.4, dice_weight=0.4, focal_weight=0.2)
-    criterion_depth = DepthLoss(l1_weight=0.7, mse_weight=0.2, fp_weight=0.1)
+    criterion_segmentation = CombinedSegmentationLoss(iou_weight=0.6, dice_weight=0.3, focal_weight=0.1)
+    criterion_depth = DepthLoss(l1_weight=0.8, mse_weight=0.1, fp_weight=0.1)
 
     # Optimizer with weight decay
     optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
