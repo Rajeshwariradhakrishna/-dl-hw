@@ -79,8 +79,8 @@ class Detector(nn.Module):
         self.encoder3 = self._conv_block(128, 256)
 
         # Attention Gates (Modified)
-        self.attention1 = AttentionGate(256, 128)  # Match encoder3 and encoder2 channels
-        self.attention2 = AttentionGate(128, 64)   # Match encoder2 and encoder1 channels
+        self.attention1 = AttentionGate(256, 128)  # Match encoder3 and decoder1 channels
+        self.attention2 = AttentionGate(128, 64)   # Match encoder2 and decoder2 channels
 
         # Decoder (3 upsampling layers)
         self.decoder1 = self._upconv_block(256, 128)
@@ -135,20 +135,20 @@ class Detector(nn.Module):
         e3 = self.encoder3(e2)  # 256 channels
 
         # Decoder with skip connections and attention gates
-        d1 = self.decoder1(e3)
-        d1 = self.attention1(e3, d1)  # Now matches encoder3 and decoder1
+        d1 = self.decoder1(e3)  # 128 channels
+        d1 = self.attention1(e3, d1)  # Apply attention gate (256 and 128 channels)
 
-        d2 = self.decoder2(d1)
-        d2 = self.attention2(e2, d2)  # Now matches encoder2 and decoder2
+        d2 = self.decoder2(d1)  # 64 channels
+        d2 = self.attention2(e2, d2)  # Apply attention gate (128 and 64 channels)
 
-        d3 = self.decoder3(d2)
+        d3 = self.decoder3(d2)  # 32 channels
 
         # Apply dropout
         d3 = self.dropout(d3)
 
         # Segmentation and Depth Heads
-        logits = self.segmentation_head(d3)
-        raw_depth = self.depth_head(d3)
+        logits = self.segmentation_head(d3)  # Segmentation output
+        raw_depth = self.depth_head(d3)  # Depth output
 
         return logits, raw_depth
 
@@ -157,6 +157,7 @@ class Detector(nn.Module):
         pred = logits.argmax(dim=1)  # (B, H, W)
         depth = raw_depth.squeeze(1)  # (B, H, W)
         return pred, depth
+
 
 MODEL_FACTORY = {
     "classifier": Classifier,
