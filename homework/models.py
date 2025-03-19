@@ -56,28 +56,28 @@ class Detector(torch.nn.Module):
         self.register_buffer("input_mean", torch.as_tensor(INPUT_MEAN))
         self.register_buffer("input_std", torch.as_tensor(INPUT_STD))
 
-        # Encoder with increased filters
-        self.encoder1 = self._conv_block(in_channels, 128)  # (B, 128, H/2, W/2)
-        self.encoder2 = self._conv_block(128, 256)          # (B, 256, H/4, W/4)
-        self.encoder3 = self._conv_block(256, 512)          # (B, 512, H/8, W/8)
-        self.encoder4 = self._conv_block(512, 1024)         # (B, 1024, H/16, W/16)
+        # Encoder
+        self.encoder1 = self._conv_block(in_channels, 64)  # (B, 64, H/2, W/2)
+        self.encoder2 = self._conv_block(64, 128)          # (B, 128, H/4, W/4)
+        self.encoder3 = self._conv_block(128, 256)         # (B, 256, H/8, W/8)
+        self.encoder4 = self._conv_block(256, 512)         # (B, 512, H/16, W/16)
 
-        # Decoder with updated channels
-        self.decoder1 = self._upconv_block(1024, 512)       # (B, 512, H/8, W/8)
-        self.decoder2 = self._upconv_block(512 + 512, 256)  # (B, 256, H/4, W/4)
-        self.decoder3 = self._upconv_block(256 + 256, 128)  # (B, 128, H/2, W/2)
-        self.decoder4 = self._upconv_block(128 + 128, 64)   # (B, 64, H, W)
+        # Decoder with skip connections and attention
+        self.decoder1 = self._upconv_block(512, 256)       # (B, 256, H/8, W/8)
+        self.decoder2 = self._upconv_block(256 + 256, 128) # (B, 128, H/4, W/4)
+        self.decoder3 = self._upconv_block(128 + 128, 64)  # (B, 64, H/2, W/2)
+        self.decoder4 = self._upconv_block(64 + 64, 32)    # (B, 32, H, W)
 
         # Attention Mechanism (Squeeze-and-Excitation)
-        self.se1 = self._se_block(512)  # For e3 (512 channels)
-        self.se2 = self._se_block(256)  # For e2 (256 channels)
-        self.se3 = self._se_block(128)  # For e1 (128 channels)
+        self.se1 = self._se_block(256)  # For e3 (256 channels)
+        self.se2 = self._se_block(128)  # For e2 (128 channels)
+        self.se3 = self._se_block(64)   # For e1 (64 channels)
 
         # Segmentation Head
-        self.segmentation_conv = nn.Conv2d(64, num_classes, kernel_size=1)  # (B, num_classes, H, W)
+        self.segmentation_conv = nn.Conv2d(32, num_classes, kernel_size=1)  # (B, num_classes, H, W)
 
         # Depth Head
-        self.depth_conv = nn.Conv2d(64, 1, kernel_size=1)  # (B, 1, H, W)
+        self.depth_conv = nn.Conv2d(32, 1, kernel_size=1)  # (B, 1, H, W)
 
     def _conv_block(self, in_channels, out_channels):
         return nn.Sequential(
@@ -108,28 +108,28 @@ class Detector(torch.nn.Module):
         z = (x - self.input_mean[None, :, None, None]) / self.input_std[None, :, None, None]
 
         # Encoder
-        e1 = self.encoder1(z)  # (B, 128, H/2, W/2)
-        e2 = self.encoder2(e1)  # (B, 256, H/4, W/4)
-        e3 = self.encoder3(e2)  # (B, 512, H/8, W/8)
-        e4 = self.encoder4(e3)  # (B, 1024, H/16, W/16)
+        e1 = self.encoder1(z)  # (B, 64, H/2, W/2)
+        e2 = self.encoder2(e1)  # (B, 128, H/4, W/4)
+        e3 = self.encoder3(e2)  # (B, 256, H/8, W/8)
+        e4 = self.encoder4(e3)  # (B, 512, H/16, W/16)
 
         # Decoder with skip connections and attention
-        d1 = self.decoder1(e4)  # (B, 512, H/8, W/8)
-        se1_output = self.se1(e3)  # (B, 512, 1, 1)
+        d1 = self.decoder1(e4)  # (B, 256, H/8, W/8)
+        se1_output = self.se1(e3)  # (B, 256, 1, 1)
         se1_output = F.interpolate(se1_output, size=d1.shape[2:], mode='bilinear', align_corners=False)  # Upsample to match d1
-        d1 = torch.cat([d1, se1_output], dim=1)  # Skip connection with e3 (512 channels)
+        d1 = torch.cat([d1, se1_output], dim=1)  # Skip connection with e3 (256 channels)
 
-        d2 = self.decoder2(d1)  # (B, 256, H/4, W/4)
-        se2_output = self.se2(e2)  # (B, 256, 1, 1)
+        d2 = self.decoder2(d1)  # (B, 128, H/4, W/4)
+        se2_output = self.se2(e2)  # (B, 128, 1, 1)
         se2_output = F.interpolate(se2_output, size=d2.shape[2:], mode='bilinear', align_corners=False)  # Upsample to match d2
-        d2 = torch.cat([d2, se2_output], dim=1)  # Skip connection with e2 (256 channels)
+        d2 = torch.cat([d2, se2_output], dim=1)  # Skip connection with e2 (128 channels)
 
-        d3 = self.decoder3(d2)  # (B, 128, H/2, W/2)
-        se3_output = self.se3(e1)  # (B, 128, 1, 1)
+        d3 = self.decoder3(d2)  # (B, 64, H/2, W/2)
+        se3_output = self.se3(e1)  # (B, 64, 1, 1)
         se3_output = F.interpolate(se3_output, size=d3.shape[2:], mode='bilinear', align_corners=False)  # Upsample to match d3
-        d3 = torch.cat([d3, se3_output], dim=1)  # Skip connection with e1 (128 channels)
+        d3 = torch.cat([d3, se3_output], dim=1)  # Skip connection with e1 (64 channels)
 
-        d4 = self.decoder4(d3)  # (B, 64, H, W)
+        d4 = self.decoder4(d3)  # (B, 32, H, W)
 
         # Segmentation and Depth Heads
         logits = self.segmentation_conv(d4)  # (B, num_classes, H, W)

@@ -104,7 +104,7 @@ class DepthLoss(nn.Module):
 
 
 # Training Function
-def train(model_name="detector", num_epoch=100, lr=1e-3, patience=20):
+def train(model_name="detector", num_epoch=150, lr=1e-3, patience=20):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # Load dataset
@@ -115,7 +115,7 @@ def train(model_name="detector", num_epoch=100, lr=1e-3, patience=20):
     model = Detector().to(device)
 
     # Loss functions
-    criterion_segmentation = CombinedSegmentationLoss(iou_weight=0.4, dice_weight=0.4, focal_weight=0.2)
+    criterion_segmentation = CombinedSegmentationLoss(iou_weight=0.6, dice_weight=0.3, focal_weight=0.1)    
     criterion_depth = DepthLoss(l1_weight=0.7, mse_weight=0.2, fp_weight=0.1)
 
     # Optimizer with weight decay
@@ -207,4 +207,4 @@ def train(model_name="detector", num_epoch=100, lr=1e-3, patience=20):
 
 
 if __name__ == "__main__":
-    train(model_name="detector", num_epoch=100, lr=1e-3, patience=20)
+    train(model_name="detector", num_epoch=150, lr=1e-3, patience=20)
