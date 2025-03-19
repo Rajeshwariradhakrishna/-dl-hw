@@ -151,7 +151,6 @@ class Detector(torch.nn.Module):
 
         # TODO: replace with actual forward pass
         # Encoder
-        # Encoder
         e1 = self.encoder.layer1(self.encoder.relu(self.encoder.bn1(self.encoder.conv1(z))))
         e2 = self.encoder.layer2(e1)
         e3 = self.encoder.layer3(e2)
