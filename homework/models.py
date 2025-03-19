@@ -78,9 +78,9 @@ class Detector(nn.Module):
         self.encoder2 = self._conv_block(64, 128)
         self.encoder3 = self._conv_block(128, 256)
 
-        # Attention Gates
-        self.attention1 = AttentionGate(128, 256)
-        self.attention2 = AttentionGate(64, 128)
+        # Attention Gates (Modified)
+        self.attention1 = AttentionGate(256, 128)  # Match encoder3 and encoder2 channels
+        self.attention2 = AttentionGate(128, 64)   # Match encoder2 and encoder1 channels
 
         # Decoder (3 upsampling layers)
         self.decoder1 = self._upconv_block(256, 128)
@@ -130,16 +130,16 @@ class Detector(nn.Module):
         z = (x - self.input_mean[None, :, None, None]) / self.input_std[None, :, None, None]
 
         # Encoder
-        e1 = self.encoder1(z)
-        e2 = self.encoder2(e1)
-        e3 = self.encoder3(e2)
+        e1 = self.encoder1(z)  # 64 channels
+        e2 = self.encoder2(e1)  # 128 channels
+        e3 = self.encoder3(e2)  # 256 channels
 
         # Decoder with skip connections and attention gates
         d1 = self.decoder1(e3)
-        d1 = self.attention1(e2, d1)
+        d1 = self.attention1(e3, d1)  # Now matches encoder3 and decoder1
 
         d2 = self.decoder2(d1)
-        d2 = self.attention2(e1, d2)
+        d2 = self.attention2(e2, d2)  # Now matches encoder2 and decoder2
 
         d3 = self.decoder3(d2)
 
@@ -157,7 +157,6 @@ class Detector(nn.Module):
         pred = logits.argmax(dim=1)  # (B, H, W)
         depth = raw_depth.squeeze(1)  # (B, H, W)
         return pred, depth
-
 
 MODEL_FACTORY = {
     "classifier": Classifier,
