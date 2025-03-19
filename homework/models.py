@@ -56,7 +56,7 @@ class AttentionGate(nn.Module):
         self.conv_gate = nn.Conv2d(gate_channels, in_channels, kernel_size=1)
         self.conv_input = nn.Conv2d(in_channels, in_channels, kernel_size=1)
         self.relu = nn.ReLU()
-        self.conv_attention = nn.Conv2d(in_channels, 1, kernel_size=1)
+        self.conv_attention = nn.Conv2d(in_channels, in_channels, kernel_size=1)  # Changed to in_channels
         self.sigmoid = nn.Sigmoid()
 
     def forward(self, x, g):
@@ -74,14 +74,18 @@ class Detector(nn.Module):
         self.register_buffer("input_std", torch.as_tensor(INPUT_STD))
 
         # Encoder (3 downsampling layers)
-        self.encoder1 = self._conv_block(in_channels, 64)  # (B, 64, H/2, W/2)
-        self.encoder2 = self._conv_block(64, 128)          # (B, 128, H/4, W/4)
-        self.encoder3 = self._conv_block(128, 256)         # (B, 256, H/8, W/8)
+        self.encoder1 = self._conv_block(in_channels, 64)
+        self.encoder2 = self._conv_block(64, 128)
+        self.encoder3 = self._conv_block(128, 256)
+
+        # Attention Gates
+        self.attention1 = AttentionGate(128, 256)
+        self.attention2 = AttentionGate(64, 128)
 
         # Decoder (3 upsampling layers)
-        self.decoder1 = self._upconv_block(256, 128)       # (B, 128, H/4, W/4)
-        self.decoder2 = self._upconv_block(128 + 128, 64)  # (B, 64, H/2, W/2)
-        self.decoder3 = self._upconv_block(64 + 64, 32)    # (B, 32, H, W)
+        self.decoder1 = self._upconv_block(256, 128)
+        self.decoder2 = self._upconv_block(128, 64)
+        self.decoder3 = self._upconv_block(64, 32)
 
         # Dropout for regularization
         self.dropout = nn.Dropout2d(0.5)
@@ -90,7 +94,7 @@ class Detector(nn.Module):
         self.segmentation_head = nn.Sequential(
             nn.Conv2d(32, 64, kernel_size=3, padding=1),
             nn.ReLU(),
-            nn.Dropout2d(0.5),  # Add dropout
+            nn.Dropout2d(0.5),
             nn.Conv2d(64, 128, kernel_size=3, padding=1),
             nn.ReLU(),
             nn.Conv2d(128, 256, kernel_size=3, padding=1),
@@ -102,7 +106,7 @@ class Detector(nn.Module):
         self.depth_head = nn.Sequential(
             nn.Conv2d(32, 64, kernel_size=3, padding=1),
             nn.ReLU(),
-            nn.Dropout2d(0.5),  # Add dropout
+            nn.Dropout2d(0.5),
             nn.Conv2d(64, 128, kernel_size=3, padding=1),
             nn.ReLU(),
             nn.Conv2d(128, 1, kernel_size=1)
@@ -128,25 +132,25 @@ class Detector(nn.Module):
         z = (x - self.input_mean[None, :, None, None]) / self.input_std[None, :, None, None]
 
         # Encoder
-        e1 = self.encoder1(z)  # (B, 64, H/2, W/2)
-        e2 = self.encoder2(e1)  # (B, 128, H/4, W/4)
-        e3 = self.encoder3(e2)  # (B, 256, H/8, W/8)
+        e1 = self.encoder1(z)
+        e2 = self.encoder2(e1)
+        e3 = self.encoder3(e2)
 
         # Decoder with skip connections and attention gates
-        d1 = self.decoder1(e3)  # (B, 128, H/4, W/4)
-        d1 = torch.cat([d1, e2], dim=1)  # Skip connection with e2 (128 channels)
+        d1 = self.decoder1(e3)
+        d1 = self.attention1(e2, d1)
 
-        d2 = self.decoder2(d1)  # (B, 64, H/2, W/2)
-        d2 = torch.cat([d2, e1], dim=1)  # Skip connection with e1 (64 channels)
+        d2 = self.decoder2(d1)
+        d2 = self.attention2(e1, d2)
 
-        d3 = self.decoder3(d2)  # (B, 32, H, W)
+        d3 = self.decoder3(d2)
 
         # Apply dropout
         d3 = self.dropout(d3)
 
         # Segmentation and Depth Heads
-        logits = self.segmentation_head(d3)  # (B, num_classes, H, W)
-        raw_depth = self.depth_head(d3)  # (B, 1, H, W)
+        logits = self.segmentation_head(d3)
+        raw_depth = self.depth_head(d3)
 
         return logits, raw_depth
 

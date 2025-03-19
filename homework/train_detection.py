@@ -26,7 +26,7 @@ def save_model(model, model_name, log_dir):
 
 # Focal Loss for Segmentation
 class FocalLoss(nn.Module):
-    def __init__(self, alpha=0.25, gamma=2.0):
+    def __init__(self, alpha=0.5, gamma=2.0):
         super(FocalLoss, self).__init__()
         self.alpha = alpha
         self.gamma = gamma
@@ -77,11 +77,11 @@ class GradientLoss(nn.Module):
 
 # Combined Loss (Segmentation + Depth + IoU + Gradient)
 class CombinedLoss(nn.Module):
-    def __init__(self, seg_weight=0.4, depth_weight=0.2, iou_weight=0.3, grad_weight=0.1):
+    def __init__(self, seg_weight=0.5, depth_weight=0.2, iou_weight=0.3, grad_weight=0.1):
         super(CombinedLoss, self).__init__()
-        self.seg_loss = FocalLoss()  # Use Focal Loss for segmentation
-        self.depth_loss = nn.HuberLoss()  # Use Huber Loss for depth
-        self.iou_loss = DiceLoss()  # Use Dice Loss for IoU
+        self.seg_loss = FocalLoss(alpha=0.5, gamma=2.0)  # Adjusted Focal Loss parameters
+        self.depth_loss = nn.HuberLoss()
+        self.iou_loss = DiceLoss()
         self.grad_loss = GradientLoss()
         self.seg_weight = seg_weight
         self.depth_weight = depth_weight
@@ -131,10 +131,10 @@ def train(model_name="detector", num_epoch=50, lr=1e-3, patience=10):
     model = Detector().to(device)
 
     # Loss function
-    criterion = CombinedLoss(seg_weight=0.4, depth_weight=0.2, iou_weight=0.3, grad_weight=0.1)
+    criterion = CombinedLoss(seg_weight=0.5, depth_weight=0.2, iou_weight=0.3, grad_weight=0.1)
 
     # Optimizer with weight decay
-    optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-3)  # Increased weight decay
+    optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-3)
     scheduler = CosineAnnealingLR(optimizer, T_max=num_epoch)
 
     # Training loop
@@ -206,7 +206,7 @@ def train(model_name="detector", num_epoch=50, lr=1e-3, patience=10):
         if avg_val_loss < best_val_loss:
             best_val_loss = avg_val_loss
             epochs_no_improve = 0
-            save_model(model, model_name, log_dir)  # Save the model
+            save_model(model, model_name, log_dir)
         else:
             epochs_no_improve += 1
             if epochs_no_improve >= patience:
