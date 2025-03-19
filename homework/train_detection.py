@@ -5,7 +5,7 @@ import os
 import matplotlib.pyplot as plt
 from torchvision import transforms
 from homework.datasets.drive_dataset import load_data
-from models import UNet, HOMEWORK_DIR
+from models import Detector, HOMEWORK_DIR
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 
 # Define log directory
@@ -80,7 +80,7 @@ def train(model_name="detector", num_epoch=150, lr=1e-3, patience=20):
     val_loader = load_data("drive_data/val")
 
     # Initialize model
-    model = UNet().to(device)
+    model = Detector().to(device)
 
     # Loss function
     criterion = CombinedLoss(seg_weight=0.4, depth_weight=0.3, iou_weight=0.2, grad_weight=0.1)
