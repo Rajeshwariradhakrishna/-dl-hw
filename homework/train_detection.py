@@ -50,18 +50,22 @@ class DiceLoss(nn.Module):
 
 
 # Combined Segmentation Loss (IoU + Dice)
+# Combined Segmentation Loss (IoU + Dice + Focal)
 class CombinedSegmentationLoss(nn.Module):
-    def __init__(self, iou_weight=0.5, dice_weight=0.5):
+    def __init__(self, iou_weight=0.4, dice_weight=0.4, focal_weight=0.2):
         super(CombinedSegmentationLoss, self).__init__()
         self.iou_loss = IoULoss()
         self.dice_loss = DiceLoss()
+        self.focal_loss = FocalLoss()
         self.iou_weight = iou_weight
         self.dice_weight = dice_weight
+        self.focal_weight = focal_weight
 
     def forward(self, preds, targets):
         iou_loss = self.iou_loss(preds, targets)
         dice_loss = self.dice_loss(preds, targets)
-        return self.iou_weight * iou_loss + self.dice_weight * dice_loss
+        focal_loss = self.focal_loss(preds, targets)
+        return self.iou_weight * iou_loss + self.dice_weight * dice_loss + self.focal_weight * focal_loss
 
 
 # Training Function
@@ -76,7 +80,7 @@ def train(model_name="detector", num_epoch=50, lr=1e-3, patience=10):
     model = Detector().to(device)
 
     # Loss functions
-    criterion_segmentation = CombinedSegmentationLoss(iou_weight=0.5, dice_weight=0.5)
+    criterion_segmentation = CombinedSegmentationLoss(iou_weight=0.4, dice_weight=0.4, focal_weight=0.2)
     criterion_depth = nn.L1Loss()  # Use L1 loss for depth
 
     # Optimizer with weight decay

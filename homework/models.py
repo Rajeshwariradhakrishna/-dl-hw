@@ -61,11 +61,16 @@ class Detector(torch.nn.Module):
         self.encoder3 = self._conv_block(128, 256)         # (B, 256, H/8, W/8)
         self.encoder4 = self._conv_block(256, 512)         # (B, 512, H/16, W/16)
 
-        # Decoder with skip connections
+        # Decoder with skip connections and attention
         self.decoder1 = self._upconv_block(512, 256)       # (B, 256, H/8, W/8)
         self.decoder2 = self._upconv_block(256 + 256, 128) # (B, 128, H/4, W/4)
         self.decoder3 = self._upconv_block(128 + 128, 64)  # (B, 64, H/2, W/2)
         self.decoder4 = self._upconv_block(64 + 64, 32)    # (B, 32, H, W)
+
+        # Attention Mechanism (Squeeze-and-Excitation)
+        self.se1 = self._se_block(256)
+        self.se2 = self._se_block(128)
+        self.se3 = self._se_block(64)
 
         # Segmentation Head
         self.segmentation_conv = nn.Conv2d(32, num_classes, kernel_size=1)  # (B, num_classes, H, W)
@@ -88,6 +93,15 @@ class Detector(torch.nn.Module):
             nn.ReLU()
         )
 
+    def _se_block(self, channels, reduction=16):
+        return nn.Sequential(
+            nn.AdaptiveAvgPool2d(1),
+            nn.Conv2d(channels, channels // reduction, kernel_size=1),
+            nn.ReLU(),
+            nn.Conv2d(channels // reduction, channels, kernel_size=1),
+            nn.Sigmoid()
+        )
+
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         # Normalize input
         z = (x - self.input_mean[None, :, None, None]) / self.input_std[None, :, None, None]
@@ -98,15 +112,15 @@ class Detector(torch.nn.Module):
         e3 = self.encoder3(e2)  # (B, 256, H/8, W/8)
         e4 = self.encoder4(e3)  # (B, 512, H/16, W/16)
 
-        # Decoder with skip connections
+        # Decoder with skip connections and attention
         d1 = self.decoder1(e4)  # (B, 256, H/8, W/8)
-        d1 = torch.cat([d1, e3], dim=1)  # Skip connection with e3 (256 channels)
+        d1 = torch.cat([d1, self.se1(e3)], dim=1)  # Skip connection with e3 (256 channels)
 
         d2 = self.decoder2(d1)  # (B, 128, H/4, W/4)
-        d2 = torch.cat([d2, e2], dim=1)  # Skip connection with e2 (128 channels)
+        d2 = torch.cat([d2, self.se2(e2)], dim=1)  # Skip connection with e2 (128 channels)
 
         d3 = self.decoder3(d2)  # (B, 64, H/2, W/2)
-        d3 = torch.cat([d3, e1], dim=1)  # Skip connection with e1 (64 channels)
+        d3 = torch.cat([d3, self.se3(e1)], dim=1)  # Skip connection with e1 (64 channels)
 
         d4 = self.decoder4(d3)  # (B, 32, H, W)
 
