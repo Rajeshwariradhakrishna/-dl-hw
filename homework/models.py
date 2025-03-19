@@ -116,10 +116,10 @@ class Detector(torch.nn.Module):
         self.encoder.fc = nn.Identity()
 
         # Decoder with skip connections
-        self.decoder1 = self._upconv_block(512, 256)
-        self.decoder2 = self._upconv_block(256, 128)  # 256 = 256 (decoder) + 0 (skip)
-        self.decoder3 = self._upconv_block(128, 64)   # 128 = 128 (decoder) + 0 (skip)
-        self.decoder4 = self._upconv_block(64, 32)    # 64 = 64 (decoder) + 0 (skip)
+        self.decoder1 = self._upconv_block(512, 256)  # 512 -> 256
+        self.decoder2 = self._upconv_block(256 + 256, 128)  # 256 (decoder) + 256 (skip) -> 128
+        self.decoder3 = self._upconv_block(128 + 128, 64)   # 128 (decoder) + 128 (skip) -> 64
+        self.decoder4 = self._upconv_block(64 + 64, 32)     # 64 (decoder) + 64 (skip) -> 32
 
         # Heads
         self.segmentation_head = nn.Conv2d(32, num_classes, kernel_size=1)
@@ -132,6 +132,7 @@ class Detector(torch.nn.Module):
             nn.ReLU(),
             nn.Dropout(0.2)  # Added dropout for regularization
         )
+
     
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """
@@ -157,16 +158,16 @@ class Detector(torch.nn.Module):
         e4 = self.encoder.layer4(e3)
 
         # Decoder with skip connections
-        d1 = self.decoder1(e4)
-        d1 = torch.cat([d1, e3], dim=1)  # Skip connection with e3
+        d1 = self.decoder1(e4)  # 512 -> 256
+        d1 = torch.cat([d1, e3], dim=1)  # Skip connection with e3 (256 channels)
 
-        d2 = self.decoder2(d1)
-        d2 = torch.cat([d2, e2], dim=1)  # Skip connection with e2
+        d2 = self.decoder2(d1)  # 256 + 256 -> 128
+        d2 = torch.cat([d2, e2], dim=1)  # Skip connection with e2 (128 channels)
 
-        d3 = self.decoder3(d2)
-        d3 = torch.cat([d3, e1], dim=1)  # Skip connection with e1
+        d3 = self.decoder3(d2)  # 128 + 128 -> 64
+        d3 = torch.cat([d3, e1], dim=1)  # Skip connection with e1 (64 channels)
 
-        d4 = self.decoder4(d3)
+        d4 = self.decoder4(d3)  # 64 + 64 -> 32
 
         # Heads
         logits = self.segmentation_head(d4)
