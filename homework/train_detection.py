@@ -107,15 +107,8 @@ class DepthLoss(nn.Module):
 def train(model_name="detector", num_epoch=100, lr=1e-3, patience=20):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    transform = transforms.Compose([
-    transforms.RandomHorizontalFlip(p=0.5),  # Randomly flip images horizontally
-    transforms.RandomVerticalFlip(p=0.5),    # Randomly flip images vertically
-    transforms.RandomRotation(degrees=10),   # Randomly rotate images by up to 10 degrees
-    transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1),  # Randomly adjust color
-])
-
     # Load dataset
-    train_loader = load_data("drive_data/train", transform=transform)
+    train_loader = load_data("drive_data/train")
     val_loader = load_data("drive_data/val")
 
     # Initialize model
