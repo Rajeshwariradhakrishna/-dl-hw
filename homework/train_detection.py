@@ -2,67 +2,37 @@ import torch
 import torch.optim as optim
 import torch.nn as nn
 import os
-import numpy as np
 import matplotlib.pyplot as plt
 from torchvision import transforms
 from homework.datasets.drive_dataset import load_data
 from models import Detector, HOMEWORK_DIR
-from torch.optim.lr_scheduler import ReduceLROnPlateau
+from torch.optim.lr_scheduler import CosineAnnealingLR
 
 # Define log directory
 log_dir = str(HOMEWORK_DIR)
 os.makedirs(log_dir, exist_ok=True)
+
 
 def save_model(model, model_name, log_dir):
     model_path = os.path.join(log_dir, f"{model_name}.th")
     torch.save(model.state_dict(), model_path)
     print(f"Model saved to {model_path}")
 
-# Focal Loss for Segmentation
-class FocalLoss(nn.Module):
-    def __init__(self, alpha=1, gamma=2, reduction='mean'):
-        super(FocalLoss, self).__init__()
-        self.alpha = alpha
-        self.gamma = gamma
-        self.reduction = reduction
 
-    def forward(self, preds, targets):
-        ce_loss = nn.CrossEntropyLoss(reduction='none')(preds, targets)
-        pt = torch.exp(-ce_loss)
-        focal_loss = self.alpha * (1 - pt) ** self.gamma * ce_loss
-        if self.reduction == 'mean':
-            return focal_loss.mean()
-        elif self.reduction == 'sum':
-            return focal_loss.sum()
-        return focal_loss
-
-# Dice Loss for Segmentation
-class DiceLoss(nn.Module):
+# IoU Loss for Segmentation
+class IoULoss(nn.Module):
     def __init__(self, smooth=1e-6):
-        super(DiceLoss, self).__init__()
+        super(IoULoss, self).__init__()
         self.smooth = smooth
 
     def forward(self, preds, targets):
         preds = torch.softmax(preds, dim=1)
         targets_one_hot = torch.nn.functional.one_hot(targets, num_classes=preds.shape[1]).permute(0, 3, 1, 2).float()
         intersection = (preds * targets_one_hot).sum(dim=(2, 3))
-        union = preds.sum(dim=(2, 3)) + targets_one_hot.sum(dim=(2, 3))
-        dice = (2 * intersection + self.smooth) / (union + self.smooth)
-        return 1 - dice.mean()
+        union = preds.sum(dim=(2, 3)) + targets_one_hot.sum(dim=(2, 3)) - intersection
+        iou = (intersection + self.smooth) / (union + self.smooth)
+        return 1 - iou.mean()
 
-# Combined Segmentation Loss (Focal + Dice)
-class CombinedSegmentationLoss(nn.Module):
-    def __init__(self, focal_weight=0.3, dice_weight=0.7):  # Adjusted weights
-        super(CombinedSegmentationLoss, self).__init__()
-        self.focal_loss = FocalLoss()
-        self.dice_loss = DiceLoss()
-        self.focal_weight = focal_weight
-        self.dice_weight = dice_weight
-
-    def forward(self, preds, targets):
-        focal_loss = self.focal_loss(preds, targets)
-        dice_loss = self.dice_loss(preds, targets)
-        return self.focal_weight * focal_loss + self.dice_weight * dice_loss
 
 # Combined Depth Loss (L1 + MSE)
 class CombinedDepthLoss(nn.Module):
@@ -78,44 +48,10 @@ class CombinedDepthLoss(nn.Module):
         mse_loss = self.mse_loss(preds, targets)
         return self.l1_weight * l1_loss + self.mse_weight * mse_loss
 
-# Visualize Predictions
-def visualize_predictions(model, val_loader, device):
-    model.eval()
-    with torch.no_grad():
-        for batch in val_loader:
-            images = batch['image'].to(device)
-            segmentation_labels = batch['track'].to(device).long()
-            segmentation_pred, _ = model(images)
-            segmentation_pred = torch.argmax(segmentation_pred, dim=1)
-
-            plt.figure(figsize=(10, 5))
-            plt.subplot(1, 3, 1)
-            plt.imshow(images[0].cpu().permute(1, 2, 0))
-            plt.title("Image")
-            plt.subplot(1, 3, 2)
-            plt.imshow(segmentation_labels[0].cpu(), cmap="jet")
-            plt.title("Ground Truth")
-            plt.subplot(1, 3, 3)
-            plt.imshow(segmentation_pred[0].cpu(), cmap="jet")
-            plt.title("Prediction")
-            plt.show()
-            break
 
 # Training Function
-def train(model_name="detector", num_epoch=150, lr=1e-3, patience=10):
+def train(model_name="detector", num_epoch=50, lr=1e-3, patience=10):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-    # Data Augmentation
-    train_transform = transforms.Compose([
-        transforms.RandomHorizontalFlip(),
-        transforms.RandomRotation(20),
-        transforms.RandomResizedCrop((256, 256), scale=(0.8, 1.0)),
-        transforms.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.3),
-        transforms.ToTensor(),
-    ])
-    val_transform = transforms.Compose([
-        transforms.ToTensor(),
-    ])
 
     # Load dataset
     train_loader = load_data("drive_data/train")
@@ -125,12 +61,12 @@ def train(model_name="detector", num_epoch=150, lr=1e-3, patience=10):
     model = Detector().to(device)
 
     # Loss functions
-    criterion_segmentation = CombinedSegmentationLoss(focal_weight=0.3, dice_weight=0.7)
+    criterion_segmentation = IoULoss()  # Use IoU Loss for segmentation
     criterion_depth = CombinedDepthLoss(l1_weight=0.8, mse_weight=0.2)
 
     # Optimizer with weight decay
     optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
-    scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=5, verbose=True)
+    scheduler = CosineAnnealingLR(optimizer, T_max=num_epoch, eta_min=1e-5)
 
     # Training loop
     best_val_loss = float('inf')
@@ -211,11 +147,10 @@ def train(model_name="detector", num_epoch=150, lr=1e-3, patience=10):
                 print(f"Early stopping at epoch {epoch + 1} with best validation loss: {best_val_loss:.4f}")
                 break
 
-        scheduler.step(avg_val_loss)
+        scheduler.step()
 
-    # Visualize predictions after training
-    visualize_predictions(model, val_loader, device)
     print("Training complete!")
 
+
 if __name__ == "__main__":
-    train(model_name="detector", num_epoch=150, lr=1e-3, patience=10)
+    train(model_name="detector", num_epoch=50, lr=1e-3, patience=10)
