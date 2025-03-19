@@ -19,19 +19,19 @@ def save_model(model, model_name, log_dir):
     print(f"Model saved to {model_path}")
 
 
-# IoU Loss for Segmentation
-class IoULoss(nn.Module):
+# Dice Loss for Segmentation
+class DiceLoss(nn.Module):
     def __init__(self, smooth=1e-6):
-        super(IoULoss, self).__init__()
+        super(DiceLoss, self).__init__()
         self.smooth = smooth
 
     def forward(self, preds, targets):
         preds = torch.softmax(preds, dim=1)
         targets_one_hot = torch.nn.functional.one_hot(targets, num_classes=preds.shape[1]).permute(0, 3, 1, 2).float()
         intersection = (preds * targets_one_hot).sum(dim=(2, 3))
-        union = preds.sum(dim=(2, 3)) + targets_one_hot.sum(dim=(2, 3)) - intersection
-        iou = (intersection + self.smooth) / (union + self.smooth)
-        return 1 - iou.mean()
+        union = preds.sum(dim=(2, 3)) + targets_one_hot.sum(dim=(2, 3))
+        dice = (2 * intersection + self.smooth) / (union + self.smooth)
+        return 1 - dice.mean()
 
 
 # Gradient Loss for Boundary Prediction
@@ -58,11 +58,11 @@ class GradientLoss(nn.Module):
 
 # Combined Loss (Segmentation + Depth + IoU + Gradient)
 class CombinedLoss(nn.Module):
-    def __init__(self, seg_weight=0.3, depth_weight=0.2, iou_weight=0.5, grad_weight=0.2):
+    def __init__(self, seg_weight=0.4, depth_weight=0.2, iou_weight=0.3, grad_weight=0.1):
         super(CombinedLoss, self).__init__()
-        self.seg_loss = nn.CrossEntropyLoss()
+        self.seg_loss = DiceLoss()  # Use Dice Loss for segmentation
         self.depth_loss = nn.L1Loss()
-        self.iou_loss = IoULoss()
+        self.iou_loss = DiceLoss()  # Use Dice Loss for IoU
         self.grad_loss = GradientLoss()
         self.seg_weight = seg_weight
         self.depth_weight = depth_weight
@@ -112,7 +112,7 @@ def train(model_name="detector", num_epoch=150, lr=1e-3, patience=20):
     model = Detector().to(device)
 
     # Loss function
-    criterion = CombinedLoss(seg_weight=0.3, depth_weight=0.2, iou_weight=0.5, grad_weight=0.2)
+    criterion = CombinedLoss(seg_weight=0.4, depth_weight=0.2, iou_weight=0.3, grad_weight=0.1)
 
     # Optimizer with weight decay
     optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
