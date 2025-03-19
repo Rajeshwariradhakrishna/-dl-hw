@@ -92,14 +92,14 @@ class Detector(nn.Module):
 
         # Segmentation Head
         self.segmentation_head = nn.Sequential(
-            nn.Conv2d(32, 64, kernel_size=3, padding=1),
+            nn.Conv2d(32, 64, kernel_size=3, padding=1),  # Input channels: 32
             nn.ReLU(),
             nn.Dropout2d(0.5),
             nn.Conv2d(64, 128, kernel_size=3, padding=1),
             nn.ReLU(),
             nn.Conv2d(128, 256, kernel_size=3, padding=1),
             nn.ReLU(),
-            nn.Conv2d(256, num_classes, kernel_size=1)
+            nn.Conv2d(256, num_classes, kernel_size=1)  # Output channels: num_classes
         )
 
         # Depth Head
@@ -159,7 +159,6 @@ class Detector(nn.Module):
         pred = logits.argmax(dim=1)  # (B, H, W)
         depth = raw_depth.squeeze(1)  # (B, H, W)
         return pred, depth
-
 
 MODEL_FACTORY = {
     "classifier": Classifier,
