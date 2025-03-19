@@ -62,14 +62,10 @@ class AttentionGate(nn.Module):
     def forward(self, x, g):
         gate = self.conv_gate(g)
         x_input = self.conv_input(x)
-        
-        # Make sure gate and x_input have the same spatial dimensions
-        if gate.size(2) != x_input.size(2) or gate.size(3) != x_input.size(3):
-            gate = F.interpolate(gate, size=x_input.size()[2:], mode='bilinear', align_corners=False)
-        
         combined = self.relu(gate + x_input)
         attention = self.sigmoid(self.conv_attention(combined))
         return x * attention
+
 
 class Detector(nn.Module):
     def __init__(self, in_channels: int = 3, num_classes: int = 3):
@@ -87,9 +83,9 @@ class Detector(nn.Module):
         self.attention2 = AttentionGate(128, 64)   # Match encoder2 and decoder2 channels
 
         # Decoder (3 upsampling layers)
-        self.decoder1 = self._upconv_block(256, 128)
-        self.decoder2 = self._upconv_block(128, 64)
-        self.decoder3 = self._upconv_block(64, 32)
+        self.decoder1 = self._upconv_block(256, 128)  # Input: 256, Output: 128
+        self.decoder2 = self._upconv_block(128, 64)   # Input: 128, Output: 64
+        self.decoder3 = self._upconv_block(64, 32)    # Input: 64, Output: 32
 
         # Dropout for regularization
         self.dropout = nn.Dropout2d(0.5)
@@ -159,7 +155,7 @@ class Detector(nn.Module):
     def predict(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         logits, raw_depth = self(x)
         pred = logits.argmax(dim=1)  # (B, H, W)
-        depth = raw_depth.squeeze(1)  # (B, H, W) (Keep depth as 2D without squeezing the channel)
+        depth = raw_depth.squeeze(1)  # (B, H, W)
         return pred, depth
 
 
@@ -184,12 +180,10 @@ def load_model(model_name: str, with_weights: bool = False, **model_kwargs) -> n
 def save_model(model: nn.Module) -> str:
     model_name = None
     for n, m in MODEL_FACTORY.items():
-        if isinstance(model, m):  # Use isinstance for better type-checking
+        if type(model) is m:
             model_name = n
-            break
     if model_name is None:
         raise ValueError(f"Model type '{str(type(model))}' not supported")
-    
     output_path = HOMEWORK_DIR / f"{model_name}.th"
     torch.save(model.state_dict(), output_path)
     return output_path
