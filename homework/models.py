@@ -50,7 +50,7 @@ class Classifier(nn.Module):
         return self(x).argmax(dim=1)
 
 
-class Detector(torch.nn.Module):
+class Detector(nn.Module):
     def __init__(self, in_channels: int = 3, num_classes: int = 3):
         super().__init__()
         self.register_buffer("input_mean", torch.as_tensor(INPUT_MEAN))
@@ -67,10 +67,18 @@ class Detector(torch.nn.Module):
         self.decoder3 = self._upconv_block(64 + 64, 32)    # (B, 32, H, W)
 
         # Segmentation Head
-        self.segmentation_conv = nn.Conv2d(32, num_classes, kernel_size=1)  # (B, num_classes, H, W)
+        self.segmentation_head = nn.Sequential(
+            nn.Conv2d(32, 64, kernel_size=3, padding=1),
+            nn.ReLU(),
+            nn.Conv2d(64, num_classes, kernel_size=1)
+        )
 
         # Depth Head
-        self.depth_conv = nn.Conv2d(32, 1, kernel_size=1)  # (B, 1, H, W)
+        self.depth_head = nn.Sequential(
+            nn.Conv2d(32, 64, kernel_size=3, padding=1),
+            nn.ReLU(),
+            nn.Conv2d(64, 1, kernel_size=1)
+        )
 
     def _conv_block(self, in_channels, out_channels):
         return nn.Sequential(
@@ -106,8 +114,8 @@ class Detector(torch.nn.Module):
         d3 = self.decoder3(d2)  # (B, 32, H, W)
 
         # Segmentation and Depth Heads
-        logits = self.segmentation_conv(d3)  # (B, num_classes, H, W)
-        raw_depth = self.depth_conv(d3)  # (B, 1, H, W)
+        logits = self.segmentation_head(d3)  # (B, num_classes, H, W)
+        raw_depth = self.depth_head(d3)  # (B, 1, H, W)
 
         return logits, raw_depth
 
@@ -117,13 +125,14 @@ class Detector(torch.nn.Module):
         depth = raw_depth.squeeze(1)  # (B, H, W)
         return pred, depth
 
+
 MODEL_FACTORY = {
     "classifier": Classifier,
     "detector": Detector,
 }
 
 
-def load_model(model_name: str, with_weights: bool = False, **model_kwargs) -> torch.nn.Module:
+def load_model(model_name: str, with_weights: bool = False, **model_kwargs) -> nn.Module:
     m = MODEL_FACTORY[model_name](**model_kwargs)
     if with_weights:
         model_path = HOMEWORK_DIR / f"{model_name}.th"
@@ -135,7 +144,7 @@ def load_model(model_name: str, with_weights: bool = False, **model_kwargs) -> t
     return m
 
 
-def save_model(model: torch.nn.Module) -> str:
+def save_model(model: nn.Module) -> str:
     model_name = None
     for n, m in MODEL_FACTORY.items():
         if type(model) is m:
@@ -147,5 +156,5 @@ def save_model(model: torch.nn.Module) -> str:
     return output_path
 
 
-def calculate_model_size_mb(model: torch.nn.Module) -> float:
+def calculate_model_size_mb(model: nn.Module) -> float:
     return sum(p.numel() for p in model.parameters()) * 4 / 1024 / 1024
