@@ -7,6 +7,7 @@ from torchvision import transforms
 from homework.datasets.drive_dataset import load_data
 from homework.models import Detector, HOMEWORK_DIR
 from torch.optim.lr_scheduler import CosineAnnealingLR
+import torch.nn.functional as F
 
 # Define log directory
 log_dir = str(HOMEWORK_DIR)
