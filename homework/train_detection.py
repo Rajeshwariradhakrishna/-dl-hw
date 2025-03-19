@@ -34,19 +34,49 @@ class IoULoss(nn.Module):
         return 1 - iou.mean()
 
 
-# Combined Depth Loss (L1 + MSE)
-class CombinedDepthLoss(nn.Module):
-    def __init__(self, l1_weight=0.8, mse_weight=0.2):
-        super(CombinedDepthLoss, self).__init__()
+# Dice Loss for Segmentation
+class DiceLoss(nn.Module):
+    def __init__(self, smooth=1e-6):
+        super(DiceLoss, self).__init__()
+        self.smooth = smooth
+
+    def forward(self, preds, targets):
+        preds = torch.softmax(preds, dim=1)
+        targets_one_hot = torch.nn.functional.one_hot(targets, num_classes=preds.shape[1]).permute(0, 3, 1, 2).float()
+        intersection = (preds * targets_one_hot).sum(dim=(2, 3))
+        union = preds.sum(dim=(2, 3)) + targets_one_hot.sum(dim=(2, 3))
+        dice = (2 * intersection + self.smooth) / (union + self.smooth)
+        return 1 - dice.mean()
+
+
+# Combined Segmentation Loss (IoU + Dice)
+class CombinedSegmentationLoss(nn.Module):
+    def __init__(self, iou_weight=0.5, dice_weight=0.5):
+        super(CombinedSegmentationLoss, self).__init__()
+        self.iou_loss = IoULoss()
+        self.dice_loss = DiceLoss()
+        self.iou_weight = iou_weight
+        self.dice_weight = dice_weight
+
+    def forward(self, preds, targets):
+        iou_loss = self.iou_loss(preds, targets)
+        dice_loss = self.dice_loss(preds, targets)
+        return self.iou_weight * iou_loss + self.dice_weight * dice_loss
+
+
+# Depth Loss (L1 + MSE + False Positive Penalty)
+class DepthLoss(nn.Module):
+    def __init__(self, l1_weight=0.8, mse_weight=0.2, fp_weight=0.1):
+        super(DepthLoss, self).__init__()
         self.l1_loss = nn.L1Loss()
         self.mse_loss = nn.MSELoss()
-        self.l1_weight = l1_weight
-        self.mse_weight = mse_weight
+        self.fp_weight = fp_weight
 
     def forward(self, preds, targets):
         l1_loss = self.l1_loss(preds, targets)
         mse_loss = self.mse_loss(preds, targets)
-        return self.l1_weight * l1_loss + self.mse_weight * mse_loss
+        fp_loss = torch.mean(torch.relu(preds - targets))  # Penalize false positives
+        return l1_loss + mse_loss + self.fp_weight * fp_loss
 
 
 # Training Function
@@ -61,8 +91,8 @@ def train(model_name="detector", num_epoch=50, lr=1e-3, patience=10):
     model = Detector().to(device)
 
     # Loss functions
-    criterion_segmentation = IoULoss()  # Use IoU Loss for segmentation
-    criterion_depth = CombinedDepthLoss(l1_weight=0.8, mse_weight=0.2)
+    criterion_segmentation = CombinedSegmentationLoss(iou_weight=0.5, dice_weight=0.5)
+    criterion_depth = DepthLoss(l1_weight=0.8, mse_weight=0.2, fp_weight=0.1)
 
     # Optimizer with weight decay
     optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)

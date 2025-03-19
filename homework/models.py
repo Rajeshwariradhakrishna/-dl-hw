@@ -7,48 +7,6 @@ INPUT_MEAN = [0.2788, 0.2657, 0.2629]
 INPUT_STD = [0.2064, 0.1944, 0.2252]
 
 
-class Classifier(nn.Module):
-    def __init__(self, in_channels: int = 3, num_classes: int = 6):
-        super().__init__()
-        self.register_buffer("input_mean", torch.as_tensor(INPUT_MEAN))
-        self.register_buffer("input_std", torch.as_tensor(INPUT_STD))
-
-        # Convolutional Layers with BatchNorm and ReLU
-        self.conv1 = nn.Conv2d(in_channels, 32, kernel_size=3, padding=1)
-        self.bn1 = nn.BatchNorm2d(32)
-        self.conv2 = nn.Conv2d(32, 64, kernel_size=3, padding=1)
-        self.bn2 = nn.BatchNorm2d(64)
-        self.conv3 = nn.Conv2d(64, 128, kernel_size=3, padding=1)
-        self.bn3 = nn.BatchNorm2d(128)
-
-        # Fully connected layers for classification
-        self.fc1 = nn.Linear(128 * 8 * 8, 256)
-        self.fc2 = nn.Linear(256, num_classes)
-
-        self.pool = nn.MaxPool2d(2, 2)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # Normalize input
-        z = (x - self.input_mean[None, :, None, None]) / self.input_std[None, :, None, None]
-
-        # Convolutional layers with ReLU and BatchNorm
-        x = self.pool(torch.relu(self.bn1(self.conv1(z))))
-        x = self.pool(torch.relu(self.bn2(self.conv2(x))))
-        x = self.pool(torch.relu(self.bn3(self.conv3(x))))
-
-        # Flatten the output for fully connected layer
-        x = x.view(x.size(0), -1)
-
-        # Fully connected layers
-        x = torch.relu(self.fc1(x))
-        logits = self.fc2(x)
-
-        return logits
-
-    def predict(self, x: torch.Tensor) -> torch.Tensor:
-        return self(x).argmax(dim=1)
-
-
 class Detector(torch.nn.Module):
     def __init__(self, in_channels: int = 3, num_classes: int = 3):
         super().__init__()
@@ -118,7 +76,6 @@ class Detector(torch.nn.Module):
 
 
 MODEL_FACTORY = {
-    "classifier": Classifier,
     "detector": Detector,
 }
 
