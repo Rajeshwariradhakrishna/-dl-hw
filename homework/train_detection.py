@@ -26,7 +26,7 @@ class IoULoss(nn.Module):
         self.smooth = smooth
 
     def forward(self, preds, targets):
-        preds = torch.softmax(preds, dim=1)
+        preds = torch.softmax(preds, dim=1)  # Apply softmax to get probabilities
         targets_one_hot = torch.nn.functional.one_hot(targets, num_classes=preds.shape[1]).permute(0, 3, 1, 2).float()
         intersection = (preds * targets_one_hot).sum(dim=(2, 3))
         union = preds.sum(dim=(2, 3)) + targets_one_hot.sum(dim=(2, 3)) - intersection
@@ -71,7 +71,7 @@ class FocalLoss(nn.Module):
 
 # Combined Segmentation Loss (IoU + Dice + Focal)
 class CombinedSegmentationLoss(nn.Module):
-    def __init__(self, iou_weight=0.4, dice_weight=0.4, focal_weight=0.2):
+    def __init__(self, iou_weight=0.5, dice_weight=0.5, focal_weight=0.0):  # Prioritize IoU and Dice
         super(CombinedSegmentationLoss, self).__init__()
         self.iou_loss = IoULoss()
         self.dice_loss = DiceLoss()
@@ -103,18 +103,18 @@ class DepthLoss(nn.Module):
 
 
 # Training Function
-def train(model_name="detector", num_epoch=50, lr=1e-3, patience=10):
+def train(model_name="detector", num_epoch=20, lr=1e-3, patience=5):  # Reduced to 20 epochs
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # Load dataset
-    train_loader = load_data("drive_data/train")
-    val_loader = load_data("drive_data/val")
+    # Load dataset with shuffling for training
+    train_loader = load_data("drive_data/train", shuffle=True)  # Enable shuffling
+    val_loader = load_data("drive_data/val", shuffle=False)     # No shuffling for validation
 
     # Initialize model
     model = Detector().to(device)
 
     # Loss functions
-    criterion_segmentation = CombinedSegmentationLoss(iou_weight=0.4, dice_weight=0.4, focal_weight=0.2)
+    criterion_segmentation = CombinedSegmentationLoss(iou_weight=0.5, dice_weight=0.5, focal_weight=0.0)
     criterion_depth = DepthLoss(l1_weight=0.7, mse_weight=0.2, fp_weight=0.1)
 
     # Optimizer with weight decay
@@ -149,7 +149,7 @@ def train(model_name="detector", num_epoch=50, lr=1e-3, patience=10):
             optimizer.step()
 
             # Compute IoU
-            iou_value = (1 - loss_segmentation).item()
+            iou_value = 1 - criterion_segmentation.iou_loss(segmentation_pred, segmentation_labels).item()
             depth_error = loss_depth.item()
 
             total_train_loss += loss.item()
@@ -177,7 +177,7 @@ def train(model_name="detector", num_epoch=50, lr=1e-3, patience=10):
                 loss_depth = criterion_depth(depth_pred, depth_labels)
                 loss = loss_segmentation + loss_depth
 
-                iou_value = (1 - loss_segmentation).item()
+                iou_value = 1 - criterion_segmentation.iou_loss(segmentation_pred, segmentation_labels).item()
                 depth_error = loss_depth.item()
 
                 total_val_loss += loss.item()
@@ -206,4 +206,4 @@ def train(model_name="detector", num_epoch=50, lr=1e-3, patience=10):
 
 
 if __name__ == "__main__":
-    train(model_name="detector", num_epoch=50, lr=1e-3, patience=10)
+    train(model_name="detector", num_epoch=20, lr=1e-3, patience=5)
