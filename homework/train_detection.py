@@ -19,7 +19,21 @@ def save_model(model, model_name, log_dir):
     print(f"Model saved to {model_path}")
 
 
-# Dice Loss for Segmentation
+# Focal Loss for Segmentation
+class FocalLoss(nn.Module):
+    def __init__(self, alpha=0.25, gamma=2.0):
+        super(FocalLoss, self).__init__()
+        self.alpha = alpha
+        self.gamma = gamma
+
+    def forward(self, preds, targets):
+        ce_loss = F.cross_entropy(preds, targets, reduction='none')
+        pt = torch.exp(-ce_loss)
+        focal_loss = (self.alpha * (1 - pt) ** self.gamma * ce_loss).mean()
+        return focal_loss
+
+
+# Dice Loss for IoU
 class DiceLoss(nn.Module):
     def __init__(self, smooth=1e-6):
         super(DiceLoss, self).__init__()
@@ -60,7 +74,7 @@ class GradientLoss(nn.Module):
 class CombinedLoss(nn.Module):
     def __init__(self, seg_weight=0.4, depth_weight=0.2, iou_weight=0.3, grad_weight=0.1):
         super(CombinedLoss, self).__init__()
-        self.seg_loss = DiceLoss()  # Use Dice Loss for segmentation
+        self.seg_loss = FocalLoss()  # Use Focal Loss for segmentation
         self.depth_loss = nn.L1Loss()
         self.iou_loss = DiceLoss()  # Use Dice Loss for IoU
         self.grad_loss = GradientLoss()
@@ -169,35 +183,4 @@ def train(model_name="detector", num_epoch=150, lr=1e-3, patience=20):
 
                 segmentation_pred, depth_pred = model(images)
 
-                loss = criterion(segmentation_pred, depth_pred, segmentation_labels, depth_labels)
-
-                iou_value = (1 - criterion.iou_loss(segmentation_pred, segmentation_labels)).item()
-                depth_error = criterion.depth_loss(depth_pred, depth_labels).item()
-
-                total_val_loss += loss.item()
-                total_val_iou += iou_value
-                total_val_depth_error += depth_error
-
-        avg_val_loss = total_val_loss / len(val_loader)
-        avg_val_iou = total_val_iou / len(val_loader)
-        avg_val_depth_error = total_val_depth_error / len(val_loader)
-        print(f"Epoch [{epoch + 1}/{num_epoch}] - Val Loss: {avg_val_loss:.4f}, Val IoU: {avg_val_iou:.4f}, Val Depth Error: {avg_val_depth_error:.4f}")
-
-        # Check for improvement
-        if avg_val_loss < best_val_loss:
-            best_val_loss = avg_val_loss
-            epochs_no_improve = 0
-            save_model(model, model_name, log_dir)
-        else:
-            epochs_no_improve += 1
-            if epochs_no_improve >= patience:
-                print(f"Early stopping at epoch {epoch + 1} with best validation loss: {best_val_loss:.4f}")
-                break
-
-        scheduler.step()
-
-    print("Training complete!")
-
-
-if __name__ == "__main__":
-    train(model_name="detector", num_epoch=150, lr=1e-3, patience=20)
+                loss = criterion(segmentation_pred, depth_pred
