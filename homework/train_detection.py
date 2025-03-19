@@ -1,7 +1,6 @@
 import torch
 import torch.optim as optim
 import torch.nn as nn
-import torch.nn.functional as F
 import os
 import matplotlib.pyplot as plt
 from torchvision import transforms
@@ -13,65 +12,43 @@ from torch.optim.lr_scheduler import CosineAnnealingLR
 log_dir = str(HOMEWORK_DIR)
 os.makedirs(log_dir, exist_ok=True)
 
-# Debug: Print HOMEWORK_DIR
-print(f"HOMEWORK_DIR: {HOMEWORK_DIR}")
-
-
 def save_model(model, model_name, log_dir):
     model_path = os.path.join(log_dir, f"{model_name}.th")
-    print(f"Saving model to: {model_path}")  # Debug print
     torch.save(model.state_dict(), model_path)
     print(f"Model saved to {model_path}")
 
-
-# Focal Loss for Segmentation
-class FocalLoss(nn.Module):
-    def __init__(self, alpha=0.5, gamma=2.0):
-        super(FocalLoss, self).__init__()
-        self.alpha = alpha
-        self.gamma = gamma
-
-    def forward(self, preds, targets):
-        ce_loss = F.cross_entropy(preds, targets, reduction='none')
-        pt = torch.exp(-ce_loss)
-        focal_loss = (self.alpha * (1 - pt) ** self.gamma * ce_loss).mean()
-        return focal_loss
-
-
-# Dice Loss for IoU
-class DiceLoss(nn.Module):
+# IoU Loss for Segmentation
+class IoULoss(nn.Module):
     def __init__(self, smooth=1e-6):
-        super(DiceLoss, self).__init__()
+        super(IoULoss, self).__init__()
         self.smooth = smooth
 
     def forward(self, preds, targets):
         preds = torch.softmax(preds, dim=1)
         targets_one_hot = torch.nn.functional.one_hot(targets, num_classes=preds.shape[1]).permute(0, 3, 1, 2).float()
         intersection = (preds * targets_one_hot).sum(dim=(2, 3))
-        union = preds.sum(dim=(2, 3)) + targets_one_hot.sum(dim=(2, 3))
-        dice = (2 * intersection + self.smooth) / (union + self.smooth)
-        return 1 - dice.mean()
+        union = preds.sum(dim=(2, 3)) + targets_one_hot.sum(dim=(2, 3)) - intersection
+        iou = (intersection + self.smooth) / (union + self.smooth)
+        return 1 - iou.mean()
 
 
 # Gradient Loss for Boundary Prediction
 class GradientLoss(nn.Module):
     def __init__(self):
         super(GradientLoss, self).__init__()
-        self.sobel_x = torch.tensor([[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]], dtype=torch.float32).view(1, 1, 3, 3)
-        self.sobel_y = torch.tensor([[-1, -2, -1], [0, 0, 0], [1, 2, 1]], dtype=torch.float32).view(1, 1, 3, 3)
 
     def forward(self, preds, targets):
         # Add a dummy channel dimension to targets
         targets = targets.unsqueeze(1).float()  # (B, H, W) -> (B, 1, H, W)
 
         # Compute gradients for predictions and targets
-        preds_grad_x = F.conv2d(preds, self.sobel_x.to(preds.device), padding=1)
-        preds_grad_y = F.conv2d(preds, self.sobel_y.to(preds.device), padding=1)
-        preds_grad = torch.sqrt(preds_grad_x ** 2 + preds_grad_y ** 2)
+        preds_grad_x = torch.abs(torch.gradient(preds, dim=2)[0])  # Gradient along height (dim=2)
+        preds_grad_y = torch.abs(torch.gradient(preds, dim=3)[0])  # Gradient along width (dim=3)
+        preds_grad = preds_grad_x + preds_grad_y  # Combine gradients
 
-        targets_grad_x = F.conv2d(targets, self.sobel_x.to(targets.device), padding=1)
-        targets_grad_y = F.conv2d(targets, self.sobel_y.to(targets.device), padding=1)
-        targets_grad = torch.sqrt(targets_grad_x ** 2 + targets_grad_y ** 2)
+        targets_grad_x = torch.abs(torch.gradient(targets, dim=2)[0])  # Gradient along height (dim=2)
+        targets_grad_y = torch.abs(torch.gradient(targets, dim=3)[0])  # Gradient along width (dim=3)
+        targets_grad = targets_grad_x + targets_grad_y  # Combine gradients
 
         # Compute gradient loss
         return torch.mean(torch.abs(preds_grad - targets_grad))
@@ -79,11 +56,11 @@ class GradientLoss(nn.Module):
 
 # Combined Loss (Segmentation + Depth + IoU + Gradient)
 class CombinedLoss(nn.Module):
-    def __init__(self, seg_weight=0.5, depth_weight=0.2, iou_weight=0.3, grad_weight=0.1):
+    def __init__(self, seg_weight=0.3, depth_weight=0.2, iou_weight=0.5, grad_weight=0.2):
         super(CombinedLoss, self).__init__()
-        self.seg_loss = FocalLoss(alpha=0.5, gamma=2.0)  # Adjusted Focal Loss parameters
-        self.depth_loss = nn.HuberLoss()
-        self.iou_loss = DiceLoss()
+        self.seg_loss = nn.CrossEntropyLoss()
+        self.depth_loss = nn.L1Loss()
+        self.iou_loss = IoULoss()
         self.grad_loss = GradientLoss()
         self.seg_weight = seg_weight
         self.depth_weight = depth_weight
@@ -122,7 +99,7 @@ def visualize_predictions(image, segmentation_pred, depth_pred):
 
 
 # Training Function
-def train(model_name="detector", num_epoch=50, lr=1e-3, patience=10):
+def train(model_name="detector", num_epoch=150, lr=1e-3, patience=20):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # Load dataset
@@ -133,10 +110,10 @@ def train(model_name="detector", num_epoch=50, lr=1e-3, patience=10):
     model = Detector().to(device)
 
     # Loss function
-    criterion = CombinedLoss(seg_weight=0.5, depth_weight=0.2, iou_weight=0.3, grad_weight=0.1)
+    criterion = CombinedLoss(seg_weight=0.3, depth_weight=0.2, iou_weight=0.5, grad_weight=0.2)
 
     # Optimizer with weight decay
-    optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-3)
+    optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
     scheduler = CosineAnnealingLR(optimizer, T_max=num_epoch)
 
     # Training loop
@@ -217,17 +194,8 @@ def train(model_name="detector", num_epoch=50, lr=1e-3, patience=10):
 
         scheduler.step()
 
-    # Manually save the model after training
-    save_model(model, "detector", log_dir)
-
-    # Debug: Check if the file exists
-    if os.path.exists(os.path.join(HOMEWORK_DIR, "detector.th")):
-        print("detector.th file exists!")
-    else:
-        print("detector.th file is missing!")
-
     print("Training complete!")
 
 
 if __name__ == "__main__":
-    train(model_name="detector", num_epoch=50, lr=1e-3, patience=10)
+    train(model_name="detector", num_epoch=150, lr=1e-3, patience=20)
