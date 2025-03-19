@@ -50,69 +50,34 @@ class Classifier(nn.Module):
         return self(x).argmax(dim=1)
 
 
-class AttentionGate(nn.Module):
-    def __init__(self, in_channels, gate_channels):
-        super(AttentionGate, self).__init__()
-        self.conv_gate = nn.Conv2d(gate_channels, in_channels, kernel_size=1)
-        self.conv_input = nn.Conv2d(in_channels, in_channels, kernel_size=1)
-        self.relu = nn.ReLU()
-        self.conv_attention = nn.Conv2d(in_channels, 1, kernel_size=1)
-        self.sigmoid = nn.Sigmoid()
-
-    def forward(self, x, g):
-        # Resize gate to match the spatial dimensions of x
-        gate = self.conv_gate(g)
-        if gate.size() != x.size():
-            gate = F.interpolate(gate, size=x.shape[2:], mode="bilinear", align_corners=False)
-
-        x_input = self.conv_input(x)
-        combined = self.relu(gate + x_input)
-        attention = self.sigmoid(self.conv_attention(combined))
-        return x * attention
-
-
-class Detector(nn.Module):
+class Detector(torch.nn.Module):
     def __init__(self, in_channels: int = 3, num_classes: int = 3):
         super().__init__()
         self.register_buffer("input_mean", torch.as_tensor(INPUT_MEAN))
         self.register_buffer("input_std", torch.as_tensor(INPUT_STD))
 
-        # Encoder (3 downsampling layers)
-        self.encoder1 = self._conv_block(in_channels, 64)
-        self.encoder2 = self._conv_block(64, 128)
-        self.encoder3 = self._conv_block(128, 256)
+        # Encoder
+        self.encoder1 = self._conv_block(in_channels, 64)  # (B, 64, H/2, W/2)
+        self.encoder2 = self._conv_block(64, 128)          # (B, 128, H/4, W/4)
+        self.encoder3 = self._conv_block(128, 256)         # (B, 256, H/8, W/8)
+        self.encoder4 = self._conv_block(256, 512)         # (B, 512, H/16, W/16)
 
-        # Attention Gates (Modified)
-        self.attention1 = AttentionGate(128, 256)  # Match encoder3 and decoder1 channels
-        self.attention2 = AttentionGate(64, 128)   # Match encoder2 and decoder2 channels
+        # Decoder with skip connections and attention
+        self.decoder1 = self._upconv_block(512, 256)       # (B, 256, H/8, W/8)
+        self.decoder2 = self._upconv_block(256 + 256, 128) # (B, 128, H/4, W/4)
+        self.decoder3 = self._upconv_block(128 + 128, 64)  # (B, 64, H/2, W/2)
+        self.decoder4 = self._upconv_block(64 + 64, 32)    # (B, 32, H, W)
 
-        # Decoder (3 upsampling layers)
-        self.decoder1 = self._upconv_block(256, 128)  # Input: 256, Output: 128
-        self.decoder2 = self._upconv_block(128, 64)   # Input: 128, Output: 64
-        self.decoder3 = self._upconv_block(64, 32)    # Input: 64, Output: 32
-
-        # Dropout for regularization
-        self.dropout = nn.Dropout2d(0.5)
+        # Attention Mechanism (Squeeze-and-Excitation)
+        self.se1 = self._se_block(256)  # For e3 (256 channels)
+        self.se2 = self._se_block(128)  # For e2 (128 channels)
+        self.se3 = self._se_block(64)   # For e1 (64 channels)
 
         # Segmentation Head
-        self.segmentation_head = nn.Sequential(
-            nn.Conv2d(32, 64, kernel_size=3, padding=1),  # Input channels: 32
-            nn.ReLU(),
-            nn.Dropout2d(0.5),
-            nn.Conv2d(64, 128, kernel_size=3, padding=1),
-            nn.ReLU(),
-            nn.Conv2d(128, num_classes, kernel_size=1)  # Output channels: num_classes
-        )
+        self.segmentation_conv = nn.Conv2d(32, num_classes, kernel_size=1)  # (B, num_classes, H, W)
 
         # Depth Head
-        self.depth_head = nn.Sequential(
-            nn.Conv2d(32, 64, kernel_size=3, padding=1),
-            nn.ReLU(),
-            nn.Dropout2d(0.5),
-            nn.Conv2d(64, 128, kernel_size=3, padding=1),
-            nn.ReLU(),
-            nn.Conv2d(128, 1, kernel_size=1)
-        )
+        self.depth_conv = nn.Conv2d(32, 1, kernel_size=1)  # (B, 1, H, W)
 
     def _conv_block(self, in_channels, out_channels):
         return nn.Sequential(
@@ -124,9 +89,18 @@ class Detector(nn.Module):
 
     def _upconv_block(self, in_channels, out_channels):
         return nn.Sequential(
-            nn.ConvTranspose2d(in_channels, out_channels, kernel_size=2, stride=2),
+            nn.ConvTranspose2d(in_channels, out_channels, kernel_size=3, stride=2, padding=1, output_padding=1),
             nn.BatchNorm2d(out_channels),
             nn.ReLU()
+        )
+
+    def _se_block(self, channels, reduction=16):
+        return nn.Sequential(
+            nn.AdaptiveAvgPool2d(1),  # Squeeze: Global average pooling to reduce spatial dimensions to 1x1
+            nn.Conv2d(channels, channels // reduction, kernel_size=1),  # Excitation: First FC layer (1x1 convolution)
+            nn.ReLU(),  # Activation
+            nn.Conv2d(channels // reduction, channels, kernel_size=1),  # Excitation: Second FC layer (1x1 convolution)
+            nn.Sigmoid(),  # Sigmoid activation to produce channel-wise scaling factors
         )
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
@@ -134,25 +108,32 @@ class Detector(nn.Module):
         z = (x - self.input_mean[None, :, None, None]) / self.input_std[None, :, None, None]
 
         # Encoder
-        e1 = self.encoder1(z)  # 64 channels
-        e2 = self.encoder2(e1)  # 128 channels
-        e3 = self.encoder3(e2)  # 256 channels
+        e1 = self.encoder1(z)  # (B, 64, H/2, W/2)
+        e2 = self.encoder2(e1)  # (B, 128, H/4, W/4)
+        e3 = self.encoder3(e2)  # (B, 256, H/8, W/8)
+        e4 = self.encoder4(e3)  # (B, 512, H/16, W/16)
 
-        # Decoder with skip connections and attention gates
-        d1 = self.decoder1(e3)  # 128 channels
-        d1 = self.attention1(e2, d1)  # Apply attention gate (128 and 128 channels)
+        # Decoder with skip connections and attention
+        d1 = self.decoder1(e4)  # (B, 256, H/8, W/8)
+        se1_output = self.se1(e3)  # (B, 256, 1, 1)
+        se1_output = F.interpolate(se1_output, size=d1.shape[2:], mode='bilinear', align_corners=False)  # Upsample to match d1
+        d1 = torch.cat([d1, se1_output], dim=1)  # Skip connection with e3 (256 channels)
 
-        d2 = self.decoder2(d1)  # 64 channels
-        d2 = self.attention2(e1, d2)  # Apply attention gate (64 and 64 channels)
+        d2 = self.decoder2(d1)  # (B, 128, H/4, W/4)
+        se2_output = self.se2(e2)  # (B, 128, 1, 1)
+        se2_output = F.interpolate(se2_output, size=d2.shape[2:], mode='bilinear', align_corners=False)  # Upsample to match d2
+        d2 = torch.cat([d2, se2_output], dim=1)  # Skip connection with e2 (128 channels)
 
-        d3 = self.decoder3(d2)  # 32 channels
+        d3 = self.decoder3(d2)  # (B, 64, H/2, W/2)
+        se3_output = self.se3(e1)  # (B, 64, 1, 1)
+        se3_output = F.interpolate(se3_output, size=d3.shape[2:], mode='bilinear', align_corners=False)  # Upsample to match d3
+        d3 = torch.cat([d3, se3_output], dim=1)  # Skip connection with e1 (64 channels)
 
-        # Apply dropout
-        d3 = self.dropout(d3)
+        d4 = self.decoder4(d3)  # (B, 32, H, W)
 
         # Segmentation and Depth Heads
-        logits = self.segmentation_head(d3)  # Segmentation output
-        raw_depth = self.depth_head(d3)  # Depth output
+        logits = self.segmentation_conv(d4)  # (B, num_classes, H, W)
+        raw_depth = self.depth_conv(d4)  # (B, 1, H, W)
 
         return logits, raw_depth
 
@@ -162,14 +143,13 @@ class Detector(nn.Module):
         depth = raw_depth.squeeze(1)  # (B, H, W)
         return pred, depth
 
-
 MODEL_FACTORY = {
     "classifier": Classifier,
     "detector": Detector,
 }
 
 
-def load_model(model_name: str, with_weights: bool = False, **model_kwargs) -> nn.Module:
+def load_model(model_name: str, with_weights: bool = False, **model_kwargs) -> torch.nn.Module:
     m = MODEL_FACTORY[model_name](**model_kwargs)
     if with_weights:
         model_path = HOMEWORK_DIR / f"{model_name}.th"
@@ -181,7 +161,7 @@ def load_model(model_name: str, with_weights: bool = False, **model_kwargs) -> n
     return m
 
 
-def save_model(model: nn.Module) -> str:
+def save_model(model: torch.nn.Module) -> str:
     model_name = None
     for n, m in MODEL_FACTORY.items():
         if type(model) is m:
@@ -193,5 +173,5 @@ def save_model(model: nn.Module) -> str:
     return output_path
 
 
-def calculate_model_size_mb(model: nn.Module) -> float:
+def calculate_model_size_mb(model: torch.nn.Module) -> float:
     return sum(p.numel() for p in model.parameters()) * 4 / 1024 / 1024

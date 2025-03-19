@@ -5,17 +5,19 @@ import os
 import matplotlib.pyplot as plt
 from torchvision import transforms
 from homework.datasets.drive_dataset import load_data
-from homework.models import Detector, HOMEWORK_DIR
+from models import Detector, HOMEWORK_DIR
 from torch.optim.lr_scheduler import CosineAnnealingLR
 
 # Define log directory
 log_dir = str(HOMEWORK_DIR)
 os.makedirs(log_dir, exist_ok=True)
 
+
 def save_model(model, model_name, log_dir):
     model_path = os.path.join(log_dir, f"{model_name}.th")
     torch.save(model.state_dict(), model_path)
     print(f"Model saved to {model_path}")
+
 
 # IoU Loss for Segmentation
 class IoULoss(nn.Module):
@@ -32,74 +34,76 @@ class IoULoss(nn.Module):
         return 1 - iou.mean()
 
 
-# Gradient Loss for Boundary Prediction
-class GradientLoss(nn.Module):
-    def __init__(self):
-        super(GradientLoss, self).__init__()
+# Dice Loss for Segmentation
+class DiceLoss(nn.Module):
+    def __init__(self, smooth=1e-6):
+        super(DiceLoss, self).__init__()
+        self.smooth = smooth
 
     def forward(self, preds, targets):
-        # Add a dummy channel dimension to targets
-        targets = targets.unsqueeze(1).float()  # (B, H, W) -> (B, 1, H, W)
-
-        # Compute gradients for predictions and targets
-        preds_grad_x = torch.abs(torch.gradient(preds, dim=2)[0])  # Gradient along height (dim=2)
-        preds_grad_y = torch.abs(torch.gradient(preds, dim=3)[0])  # Gradient along width (dim=3)
-        preds_grad = preds_grad_x + preds_grad_y  # Combine gradients
-
-        targets_grad_x = torch.abs(torch.gradient(targets, dim=2)[0])  # Gradient along height (dim=2)
-        targets_grad_y = torch.abs(torch.gradient(targets, dim=3)[0])  # Gradient along width (dim=3)
-        targets_grad = targets_grad_x + targets_grad_y  # Combine gradients
-
-        # Compute gradient loss
-        return torch.mean(torch.abs(preds_grad - targets_grad))
+        preds = torch.softmax(preds, dim=1)
+        targets_one_hot = torch.nn.functional.one_hot(targets, num_classes=preds.shape[1]).permute(0, 3, 1, 2).float()
+        intersection = (preds * targets_one_hot).sum(dim=(2, 3))
+        union = preds.sum(dim=(2, 3)) + targets_one_hot.sum(dim=(2, 3))
+        dice = (2 * intersection + self.smooth) / (union + self.smooth)
+        return 1 - dice.mean()
 
 
-# Combined Loss (Segmentation + Depth + IoU + Gradient)
-class CombinedLoss(nn.Module):
-    def __init__(self, seg_weight=0.3, depth_weight=0.2, iou_weight=0.5, grad_weight=0.2):
-        super(CombinedLoss, self).__init__()
-        self.seg_loss = nn.CrossEntropyLoss()
-        self.depth_loss = nn.L1Loss()
+# Focal Loss for Segmentation
+class FocalLoss(nn.Module):
+    def __init__(self, alpha=1, gamma=2, reduction='mean'):
+        super(FocalLoss, self).__init__()
+        self.alpha = alpha
+        self.gamma = gamma
+        self.reduction = reduction
+
+    def forward(self, preds, targets):
+        ce_loss = nn.CrossEntropyLoss(reduction='none')(preds, targets)
+        pt = torch.exp(-ce_loss)
+        focal_loss = self.alpha * (1 - pt) ** self.gamma * ce_loss
+
+        if self.reduction == 'mean':
+            return focal_loss.mean()
+        elif self.reduction == 'sum':
+            return focal_loss.sum()
+        return focal_loss
+
+
+# Combined Segmentation Loss (IoU + Dice + Focal)
+class CombinedSegmentationLoss(nn.Module):
+    def __init__(self, iou_weight=0.4, dice_weight=0.4, focal_weight=0.2):
+        super(CombinedSegmentationLoss, self).__init__()
         self.iou_loss = IoULoss()
-        self.grad_loss = GradientLoss()
-        self.seg_weight = seg_weight
-        self.depth_weight = depth_weight
+        self.dice_loss = DiceLoss()
+        self.focal_loss = FocalLoss()
         self.iou_weight = iou_weight
-        self.grad_weight = grad_weight
+        self.dice_weight = dice_weight
+        self.focal_weight = focal_weight
 
-    def forward(self, seg_preds, depth_preds, seg_targets, depth_targets):
-        seg_loss = self.seg_loss(seg_preds, seg_targets)
-        depth_loss = self.depth_loss(depth_preds, depth_targets)
-        iou_loss = self.iou_loss(seg_preds, seg_targets)
-        grad_loss = self.grad_loss(seg_preds, seg_targets)
-        return (
-            self.seg_weight * seg_loss +
-            self.depth_weight * depth_loss +
-            self.iou_weight * iou_loss +
-            self.grad_weight * grad_loss
-        )
+    def forward(self, preds, targets):
+        iou_loss = self.iou_loss(preds, targets)
+        dice_loss = self.dice_loss(preds, targets)
+        focal_loss = self.focal_loss(preds, targets)
+        return self.iou_weight * iou_loss + self.dice_weight * dice_loss + self.focal_weight * focal_loss
 
 
-# Visualization Function
-def visualize_predictions(image, segmentation_pred, depth_pred):
-    plt.figure(figsize=(10, 5))
-    plt.subplot(1, 3, 1)
-    plt.imshow(image.cpu().permute(1, 2, 0))
-    plt.title("Input Image")
+# Depth Loss (L1 + MSE + False Positive Penalty)
+class DepthLoss(nn.Module):
+    def __init__(self, l1_weight=0.7, mse_weight=0.2, fp_weight=0.1):
+        super(DepthLoss, self).__init__()
+        self.l1_loss = nn.L1Loss()
+        self.mse_loss = nn.MSELoss()
+        self.fp_weight = fp_weight
 
-    plt.subplot(1, 3, 2)
-    plt.imshow(segmentation_pred.argmax(dim=1).cpu().squeeze(), cmap='jet')
-    plt.title("Segmentation Prediction")
-
-    plt.subplot(1, 3, 3)
-    plt.imshow(depth_pred.cpu().squeeze(), cmap='jet')
-    plt.title("Depth Prediction")
-
-    plt.show()
+    def forward(self, preds, targets):
+        l1_loss = self.l1_loss(preds, targets)
+        mse_loss = self.mse_loss(preds, targets)
+        fp_loss = torch.mean(torch.relu(preds - targets))  # Penalize false positives
+        return l1_loss + mse_loss + self.fp_weight * fp_loss
 
 
 # Training Function
-def train(model_name="detector", num_epoch=150, lr=1e-3, patience=20):
+def train(model_name="detector", num_epoch=50, lr=1e-3, patience=10):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # Load dataset
@@ -109,12 +113,13 @@ def train(model_name="detector", num_epoch=150, lr=1e-3, patience=20):
     # Initialize model
     model = Detector().to(device)
 
-    # Loss function
-    criterion = CombinedLoss(seg_weight=0.3, depth_weight=0.2, iou_weight=0.5, grad_weight=0.2)
+    # Loss functions
+    criterion_segmentation = CombinedSegmentationLoss(iou_weight=0.4, dice_weight=0.4, focal_weight=0.2)
+    criterion_depth = DepthLoss(l1_weight=0.7, mse_weight=0.2, fp_weight=0.1)
 
     # Optimizer with weight decay
     optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
-    scheduler = CosineAnnealingLR(optimizer, T_max=num_epoch)
+    scheduler = CosineAnnealingLR(optimizer, T_max=num_epoch, eta_min=1e-5)
 
     # Training loop
     best_val_loss = float('inf')
@@ -132,19 +137,20 @@ def train(model_name="detector", num_epoch=150, lr=1e-3, patience=20):
             optimizer.zero_grad()
             segmentation_pred, depth_pred = model(images)
 
-            loss = criterion(segmentation_pred, depth_pred, segmentation_labels, depth_labels)
+            loss_segmentation = criterion_segmentation(segmentation_pred, segmentation_labels)
+            loss_depth = criterion_depth(depth_pred, depth_labels)
+            loss = loss_segmentation + loss_depth
 
             if torch.isnan(loss).any():
                 print("NaN detected in loss. Stopping training.")
                 return
 
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
 
             # Compute IoU
-            iou_value = (1 - criterion.iou_loss(segmentation_pred, segmentation_labels)).item()
-            depth_error = criterion.depth_loss(depth_pred, depth_labels).item()
+            iou_value = (1 - loss_segmentation).item()
+            depth_error = loss_depth.item()
 
             total_train_loss += loss.item()
             total_train_iou += iou_value
@@ -167,10 +173,12 @@ def train(model_name="detector", num_epoch=150, lr=1e-3, patience=20):
 
                 segmentation_pred, depth_pred = model(images)
 
-                loss = criterion(segmentation_pred, depth_pred, segmentation_labels, depth_labels)
+                loss_segmentation = criterion_segmentation(segmentation_pred, segmentation_labels)
+                loss_depth = criterion_depth(depth_pred, depth_labels)
+                loss = loss_segmentation + loss_depth
 
-                iou_value = (1 - criterion.iou_loss(segmentation_pred, segmentation_labels)).item()
-                depth_error = criterion.depth_loss(depth_pred, depth_labels).item()
+                iou_value = (1 - loss_segmentation).item()
+                depth_error = loss_depth.item()
 
                 total_val_loss += loss.item()
                 total_val_iou += iou_value
@@ -198,4 +206,4 @@ def train(model_name="detector", num_epoch=150, lr=1e-3, patience=20):
 
 
 if __name__ == "__main__":
-    train(model_name="detector", num_epoch=150, lr=1e-3, patience=20)
+    train(model_name="detector", num_epoch=50, lr=1e-3, patience=10)
