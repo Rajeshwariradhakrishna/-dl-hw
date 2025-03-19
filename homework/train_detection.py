@@ -55,7 +55,6 @@ class GradientLoss(nn.Module):
         # Compute gradient loss
         return torch.mean(torch.abs(preds_grad - targets_grad))
 
-
 # Combined Loss (Segmentation + Depth + IoU + Gradient)
 class CombinedLoss(nn.Module):
     def __init__(self, seg_weight=0.4, depth_weight=0.3, iou_weight=0.2, grad_weight=0.1):
