@@ -7,6 +7,7 @@ from torchvision import transforms
 from homework.datasets.drive_dataset import load_data
 from models import Detector, HOMEWORK_DIR
 from torch.optim.lr_scheduler import CosineAnnealingLR
+from torchvision import transforms
 
 # Define log directory
 log_dir = str(HOMEWORK_DIR)
@@ -103,19 +104,26 @@ class DepthLoss(nn.Module):
 
 
 # Training Function
-def train(model_name="detector", num_epoch=50, lr=1e-3, patience=10):
+def train(model_name="detector", num_epoch=100, lr=1e-3, patience=20):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+    transform = transforms.Compose([
+    transforms.RandomHorizontalFlip(p=0.5),  # Randomly flip images horizontally
+    transforms.RandomVerticalFlip(p=0.5),    # Randomly flip images vertically
+    transforms.RandomRotation(degrees=10),   # Randomly rotate images by up to 10 degrees
+    transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1),  # Randomly adjust color
+])
+
     # Load dataset
-    train_loader = load_data("drive_data/train")
+    train_loader = load_data("drive_data/train", transform=transform)
     val_loader = load_data("drive_data/val")
 
     # Initialize model
     model = Detector().to(device)
 
     # Loss functions
-    criterion_segmentation = CombinedSegmentationLoss(iou_weight=0.6, dice_weight=0.3, focal_weight=0.1)
-    criterion_depth = DepthLoss(l1_weight=0.8, mse_weight=0.1, fp_weight=0.1)
+    criterion_segmentation = CombinedSegmentationLoss(iou_weight=0.4, dice_weight=0.4, focal_weight=0.2)
+    criterion_depth = DepthLoss(l1_weight=0.7, mse_weight=0.2, fp_weight=0.1)
 
     # Optimizer with weight decay
     optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
@@ -206,4 +214,4 @@ def train(model_name="detector", num_epoch=50, lr=1e-3, patience=10):
 
 
 if __name__ == "__main__":
-    train(model_name="detector", num_epoch=50, lr=1e-3, patience=10)
+    train(model_name="detector", num_epoch=100, lr=1e-3, patience=20)

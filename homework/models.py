@@ -57,10 +57,10 @@ class Detector(torch.nn.Module):
         self.register_buffer("input_std", torch.as_tensor(INPUT_STD))
 
         # Encoder
-        self.encoder1 = self._conv_block(in_channels, 64)  # (B, 64, H/2, W/2)
-        self.encoder2 = self._conv_block(64, 128)          # (B, 128, H/4, W/4)
-        self.encoder3 = self._conv_block(128, 256)         # (B, 256, H/8, W/8)
-        self.encoder4 = self._conv_block(256, 512)         # (B, 512, H/16, W/16)
+        self.encoder1 = self._conv_block(in_channels, 128)  
+        self.encoder2 = self._conv_block(128, 256)          
+        self.encoder3 = self._conv_block(256, 512)        
+        self.encoder4 = self._conv_block(512, 1024)         
 
         # Decoder with skip connections and attention
         self.decoder1 = self._upconv_block(512, 256)       # (B, 256, H/8, W/8)
