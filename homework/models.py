@@ -1,6 +1,7 @@
 from pathlib import Path
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 HOMEWORK_DIR = Path(__file__).resolve().parent
 INPUT_MEAN = [0.2788, 0.2657, 0.2629]
@@ -95,13 +96,12 @@ class Detector(torch.nn.Module):
 
     def _se_block(self, channels, reduction=16):
         return nn.Sequential(
-        nn.AdaptiveAvgPool2d(1),  # Squeeze: Global average pooling to reduce spatial dimensions to 1x1
-        nn.Conv2d(channels, channels // reduction, kernel_size=1),  # Excitation: First FC layer (1x1 convolution)
-        nn.ReLU(),  # Activation
-        nn.Conv2d(channels // reduction, channels, kernel_size=1),  # Excitation: Second FC layer (1x1 convolution)
-        nn.Sigmoid(),  # Sigmoid activation to produce channel-wise scaling factors
-        nn.Upsample(scale_factor=12, mode='bilinear', align_corners=False)  # Upsample to match spatial dimensions
-    )
+            nn.AdaptiveAvgPool2d(1),  # Squeeze: Global average pooling to reduce spatial dimensions to 1x1
+            nn.Conv2d(channels, channels // reduction, kernel_size=1),  # Excitation: First FC layer (1x1 convolution)
+            nn.ReLU(),  # Activation
+            nn.Conv2d(channels // reduction, channels, kernel_size=1),  # Excitation: Second FC layer (1x1 convolution)
+            nn.Sigmoid(),  # Sigmoid activation to produce channel-wise scaling factors
+        )
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         # Normalize input
@@ -115,13 +115,19 @@ class Detector(torch.nn.Module):
 
         # Decoder with skip connections and attention
         d1 = self.decoder1(e4)  # (B, 256, H/8, W/8)
-        d1 = torch.cat([d1, self.se1(e3)], dim=1)  # Skip connection with e3 (256 channels)
+        se1_output = self.se1(e3)  # (B, 256, 1, 1)
+        se1_output = F.interpolate(se1_output, size=d1.shape[2:], mode='bilinear', align_corners=False)  # Upsample to match d1
+        d1 = torch.cat([d1, se1_output], dim=1)  # Skip connection with e3 (256 channels)
 
         d2 = self.decoder2(d1)  # (B, 128, H/4, W/4)
-        d2 = torch.cat([d2, self.se2(e2)], dim=1)  # Skip connection with e2 (128 channels)
+        se2_output = self.se2(e2)  # (B, 128, 1, 1)
+        se2_output = F.interpolate(se2_output, size=d2.shape[2:], mode='bilinear', align_corners=False)  # Upsample to match d2
+        d2 = torch.cat([d2, se2_output], dim=1)  # Skip connection with e2 (128 channels)
 
         d3 = self.decoder3(d2)  # (B, 64, H/2, W/2)
-        d3 = torch.cat([d3, self.se3(e1)], dim=1)  # Skip connection with e1 (64 channels)
+        se3_output = self.se3(e1)  # (B, 64, 1, 1)
+        se3_output = F.interpolate(se3_output, size=d3.shape[2:], mode='bilinear', align_corners=False)  # Upsample to match d3
+        d3 = torch.cat([d3, se3_output], dim=1)  # Skip connection with e1 (64 channels)
 
         d4 = self.decoder4(d3)  # (B, 32, H, W)
 
