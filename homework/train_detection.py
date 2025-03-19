@@ -40,8 +40,16 @@ class GradientLoss(nn.Module):
         super(GradientLoss, self).__init__()
 
     def forward(self, preds, targets):
-        preds_grad = torch.abs(torch.gradient(preds, dim=(2, 3)))
-        targets_grad = torch.abs(torch.gradient(targets, dim=(2, 3)))
+        # Compute gradients for predictions and targets
+        preds_grad_x = torch.abs(torch.gradient(preds, dim=2)[0])  # Gradient along height (dim=2)
+        preds_grad_y = torch.abs(torch.gradient(preds, dim=3)[0])  # Gradient along width (dim=3)
+        preds_grad = preds_grad_x + preds_grad_y  # Combine gradients
+
+        targets_grad_x = torch.abs(torch.gradient(targets, dim=2)[0])  # Gradient along height (dim=2)
+        targets_grad_y = torch.abs(torch.gradient(targets, dim=3)[0])  # Gradient along width (dim=3)
+        targets_grad = targets_grad_x + targets_grad_y  # Combine gradients
+
+        # Compute gradient loss
         return torch.mean(torch.abs(preds_grad - targets_grad))
 
 
