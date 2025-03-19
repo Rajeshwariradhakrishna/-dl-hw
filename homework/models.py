@@ -56,7 +56,7 @@ class AttentionGate(nn.Module):
         self.conv_gate = nn.Conv2d(gate_channels, in_channels, kernel_size=1)
         self.conv_input = nn.Conv2d(in_channels, in_channels, kernel_size=1)
         self.relu = nn.ReLU()
-        self.conv_attention = nn.Conv2d(in_channels, in_channels, kernel_size=1)  # Changed to in_channels
+        self.conv_attention = nn.Conv2d(in_channels, in_channels, kernel_size=1)
         self.sigmoid = nn.Sigmoid()
 
     def forward(self, x, g):
@@ -97,9 +97,7 @@ class Detector(nn.Module):
             nn.Dropout2d(0.5),
             nn.Conv2d(64, 128, kernel_size=3, padding=1),
             nn.ReLU(),
-            nn.Conv2d(128, 256, kernel_size=3, padding=1),
-            nn.ReLU(),
-            nn.Conv2d(256, num_classes, kernel_size=1)  # Output channels: num_classes
+            nn.Conv2d(128, num_classes, kernel_size=1)  # Output channels: num_classes
         )
 
         # Depth Head
@@ -159,6 +157,7 @@ class Detector(nn.Module):
         pred = logits.argmax(dim=1)  # (B, H, W)
         depth = raw_depth.squeeze(1)  # (B, H, W)
         return pred, depth
+
 
 MODEL_FACTORY = {
     "classifier": Classifier,
