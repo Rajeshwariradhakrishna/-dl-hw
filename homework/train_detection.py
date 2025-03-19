@@ -16,6 +16,7 @@ os.makedirs(log_dir, exist_ok=True)
 
 def save_model(model, model_name, log_dir):
     model_path = os.path.join(log_dir, f"{model_name}.th")
+    print(f"Saving model to: {model_path}")  # Debug print
     torch.save(model.state_dict(), model_path)
     print(f"Model saved to {model_path}")
 
@@ -175,3 +176,44 @@ def train(model_name="detector", num_epoch=50, lr=1e-3, patience=10):
         # Validation
         model.eval()
         total_val_loss, total_val_iou, total_val_depth_error = 0, 0, 0
+
+        with torch.no_grad():
+            for batch in val_loader:
+                images = batch['image'].to(device)
+                segmentation_labels = batch['track'].to(device).long()
+                depth_labels = batch['depth'].to(device).unsqueeze(1)
+
+                segmentation_pred, depth_pred = model(images)
+
+                loss = criterion(segmentation_pred, depth_pred, segmentation_labels, depth_labels)
+
+                iou_value = (1 - criterion.iou_loss(segmentation_pred, segmentation_labels)).item()
+                depth_error = criterion.depth_loss(depth_pred, depth_labels).item()
+
+                total_val_loss += loss.item()
+                total_val_iou += iou_value
+                total_val_depth_error += depth_error
+
+        avg_val_loss = total_val_loss / len(val_loader)
+        avg_val_iou = total_val_iou / len(val_loader)
+        avg_val_depth_error = total_val_depth_error / len(val_loader)
+        print(f"Epoch [{epoch + 1}/{num_epoch}] - Val Loss: {avg_val_loss:.4f}, Val IoU: {avg_val_iou:.4f}, Val Depth Error: {avg_val_depth_error:.4f}")
+
+        # Check for improvement
+        if avg_val_loss < best_val_loss:
+            best_val_loss = avg_val_loss
+            epochs_no_improve = 0
+            save_model(model, model_name, log_dir)  # Save the model
+        else:
+            epochs_no_improve += 1
+            if epochs_no_improve >= patience:
+                print(f"Early stopping at epoch {epoch + 1} with best validation loss: {best_val_loss:.4f}")
+                break
+
+        scheduler.step()
+
+    print("Training complete!")
+
+
+if __name__ == "__main__":
+    train(model_name="detector", num_epoch=50, lr=1e-3, patience=10)
