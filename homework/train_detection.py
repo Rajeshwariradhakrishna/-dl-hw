@@ -5,9 +5,8 @@ import os
 import matplotlib.pyplot as plt
 from torchvision import transforms
 from homework.datasets.drive_dataset import load_data
-from models import Detector, HOMEWORK_DIR
-from torch.optim.lr_scheduler import CosineAnnealingLR
-from torchvision import transforms
+from models import UNet, HOMEWORK_DIR
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 
 # Define log directory
 log_dir = str(HOMEWORK_DIR)
@@ -35,72 +34,41 @@ class IoULoss(nn.Module):
         return 1 - iou.mean()
 
 
-# Dice Loss for Segmentation
-class DiceLoss(nn.Module):
-    def __init__(self, smooth=1e-6):
-        super(DiceLoss, self).__init__()
-        self.smooth = smooth
+# Gradient Loss for Boundary Prediction
+class GradientLoss(nn.Module):
+    def __init__(self):
+        super(GradientLoss, self).__init__()
 
     def forward(self, preds, targets):
-        preds = torch.softmax(preds, dim=1)
-        targets_one_hot = torch.nn.functional.one_hot(targets, num_classes=preds.shape[1]).permute(0, 3, 1, 2).float()
-        intersection = (preds * targets_one_hot).sum(dim=(2, 3))
-        union = preds.sum(dim=(2, 3)) + targets_one_hot.sum(dim=(2, 3))
-        dice = (2 * intersection + self.smooth) / (union + self.smooth)
-        return 1 - dice.mean()
+        preds_grad = torch.abs(torch.gradient(preds, dim=(2, 3)))
+        targets_grad = torch.abs(torch.gradient(targets, dim=(2, 3)))
+        return torch.mean(torch.abs(preds_grad - targets_grad))
 
 
-# Focal Loss for Segmentation
-class FocalLoss(nn.Module):
-    def __init__(self, alpha=1, gamma=2, reduction='mean'):
-        super(FocalLoss, self).__init__()
-        self.alpha = alpha
-        self.gamma = gamma
-        self.reduction = reduction
-
-    def forward(self, preds, targets):
-        ce_loss = nn.CrossEntropyLoss(reduction='none')(preds, targets)
-        pt = torch.exp(-ce_loss)
-        focal_loss = self.alpha * (1 - pt) ** self.gamma * ce_loss
-
-        if self.reduction == 'mean':
-            return focal_loss.mean()
-        elif self.reduction == 'sum':
-            return focal_loss.sum()
-        return focal_loss
-
-
-# Combined Segmentation Loss (IoU + Dice + Focal)
-class CombinedSegmentationLoss(nn.Module):
-    def __init__(self, iou_weight=0.4, dice_weight=0.4, focal_weight=0.2):
-        super(CombinedSegmentationLoss, self).__init__()
+# Combined Loss (Segmentation + Depth + IoU + Gradient)
+class CombinedLoss(nn.Module):
+    def __init__(self, seg_weight=0.4, depth_weight=0.3, iou_weight=0.2, grad_weight=0.1):
+        super(CombinedLoss, self).__init__()
+        self.seg_loss = nn.CrossEntropyLoss()
+        self.depth_loss = nn.L1Loss()
         self.iou_loss = IoULoss()
-        self.dice_loss = DiceLoss()
-        self.focal_loss = FocalLoss()
+        self.grad_loss = GradientLoss()
+        self.seg_weight = seg_weight
+        self.depth_weight = depth_weight
         self.iou_weight = iou_weight
-        self.dice_weight = dice_weight
-        self.focal_weight = focal_weight
+        self.grad_weight = grad_weight
 
-    def forward(self, preds, targets):
-        iou_loss = self.iou_loss(preds, targets)
-        dice_loss = self.dice_loss(preds, targets)
-        focal_loss = self.focal_loss(preds, targets)
-        return self.iou_weight * iou_loss + self.dice_weight * dice_loss + self.focal_weight * focal_loss
-
-
-# Depth Loss (L1 + MSE + False Positive Penalty)
-class DepthLoss(nn.Module):
-    def __init__(self, l1_weight=0.7, mse_weight=0.2, fp_weight=0.1):
-        super(DepthLoss, self).__init__()
-        self.l1_loss = nn.L1Loss()
-        self.mse_loss = nn.MSELoss()
-        self.fp_weight = fp_weight
-
-    def forward(self, preds, targets):
-        l1_loss = self.l1_loss(preds, targets)
-        mse_loss = self.mse_loss(preds, targets)
-        fp_loss = torch.mean(torch.relu(preds - targets))  # Penalize false positives
-        return l1_loss + mse_loss + self.fp_weight * fp_loss
+    def forward(self, seg_preds, depth_preds, seg_targets, depth_targets):
+        seg_loss = self.seg_loss(seg_preds, seg_targets)
+        depth_loss = self.depth_loss(depth_preds, depth_targets)
+        iou_loss = self.iou_loss(seg_preds, seg_targets)
+        grad_loss = self.grad_loss(seg_preds, seg_targets)
+        return (
+            self.seg_weight * seg_loss +
+            self.depth_weight * depth_loss +
+            self.iou_weight * iou_loss +
+            self.grad_weight * grad_loss
+        )
 
 
 # Training Function
@@ -112,15 +80,14 @@ def train(model_name="detector", num_epoch=150, lr=1e-3, patience=20):
     val_loader = load_data("drive_data/val")
 
     # Initialize model
-    model = Detector().to(device)
+    model = UNet().to(device)
 
-    # Loss functions
-    criterion_segmentation = CombinedSegmentationLoss(iou_weight=0.6, dice_weight=0.3, focal_weight=0.1)    
-    criterion_depth = DepthLoss(l1_weight=0.7, mse_weight=0.2, fp_weight=0.1)
+    # Loss function
+    criterion = CombinedLoss(seg_weight=0.4, depth_weight=0.3, iou_weight=0.2, grad_weight=0.1)
 
     # Optimizer with weight decay
     optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
-    scheduler = CosineAnnealingLR(optimizer, T_max=num_epoch, eta_min=1e-5)
+    scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=5, verbose=True)
 
     # Training loop
     best_val_loss = float('inf')
@@ -138,9 +105,7 @@ def train(model_name="detector", num_epoch=150, lr=1e-3, patience=20):
             optimizer.zero_grad()
             segmentation_pred, depth_pred = model(images)
 
-            loss_segmentation = criterion_segmentation(segmentation_pred, segmentation_labels)
-            loss_depth = criterion_depth(depth_pred, depth_labels)
-            loss = loss_segmentation + loss_depth
+            loss = criterion(segmentation_pred, depth_pred, segmentation_labels, depth_labels)
 
             if torch.isnan(loss).any():
                 print("NaN detected in loss. Stopping training.")
@@ -150,8 +115,8 @@ def train(model_name="detector", num_epoch=150, lr=1e-3, patience=20):
             optimizer.step()
 
             # Compute IoU
-            iou_value = (1 - loss_segmentation).item()
-            depth_error = loss_depth.item()
+            iou_value = (1 - criterion.iou_loss(segmentation_pred, segmentation_labels)).item()
+            depth_error = criterion.depth_loss(depth_pred, depth_labels).item()
 
             total_train_loss += loss.item()
             total_train_iou += iou_value
@@ -174,12 +139,10 @@ def train(model_name="detector", num_epoch=150, lr=1e-3, patience=20):
 
                 segmentation_pred, depth_pred = model(images)
 
-                loss_segmentation = criterion_segmentation(segmentation_pred, segmentation_labels)
-                loss_depth = criterion_depth(depth_pred, depth_labels)
-                loss = loss_segmentation + loss_depth
+                loss = criterion(segmentation_pred, depth_pred, segmentation_labels, depth_labels)
 
-                iou_value = (1 - loss_segmentation).item()
-                depth_error = loss_depth.item()
+                iou_value = (1 - criterion.iou_loss(segmentation_pred, segmentation_labels)).item()
+                depth_error = criterion.depth_loss(depth_pred, depth_labels).item()
 
                 total_val_loss += loss.item()
                 total_val_iou += iou_value
@@ -201,7 +164,7 @@ def train(model_name="detector", num_epoch=150, lr=1e-3, patience=20):
                 print(f"Early stopping at epoch {epoch + 1} with best validation loss: {best_val_loss:.4f}")
                 break
 
-        scheduler.step()
+        scheduler.step(avg_val_loss)
 
     print("Training complete!")
 

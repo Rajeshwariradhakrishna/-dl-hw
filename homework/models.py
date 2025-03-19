@@ -57,27 +57,22 @@ class Detector(torch.nn.Module):
         self.register_buffer("input_std", torch.as_tensor(INPUT_STD))
 
         # Encoder
-        self.encoder1 = self._conv_block(in_channels, 64)  # (B, 64, H/2, W/2)
-        self.encoder2 = self._conv_block(64, 128)          # (B, 128, H/4, W/4)
-        self.encoder3 = self._conv_block(128, 256)         # (B, 256, H/8, W/8)
-        self.encoder4 = self._conv_block(256, 512)         # (B, 512, H/16, W/16)
+        self.encoder1 = self._conv_block(in_channels, 64)
+        self.encoder2 = self._conv_block(64, 128)
+        self.encoder3 = self._conv_block(128, 256)
+        self.encoder4 = self._conv_block(256, 512)
 
-        # Decoder with skip connections and attention
-        self.decoder1 = self._upconv_block(512, 256)       # (B, 256, H/8, W/8)
-        self.decoder2 = self._upconv_block(256 + 256, 128) # (B, 128, H/4, W/4)
-        self.decoder3 = self._upconv_block(128 + 128, 64)  # (B, 64, H/2, W/2)
-        self.decoder4 = self._upconv_block(64 + 64, 32)    # (B, 32, H, W)
-
-        # Attention Mechanism (Squeeze-and-Excitation)
-        self.se1 = self._se_block(256)  # For e3 (256 channels)
-        self.se2 = self._se_block(128)  # For e2 (128 channels)
-        self.se3 = self._se_block(64)   # For e1 (64 channels)
+        # Decoder
+        self.decoder1 = self._upconv_block(512, 256)
+        self.decoder2 = self._upconv_block(512, 128)
+        self.decoder3 = self._upconv_block(256, 64)
+        self.decoder4 = self._upconv_block(128, 32)
 
         # Segmentation Head
-        self.segmentation_conv = nn.Conv2d(32, num_classes, kernel_size=1)  # (B, num_classes, H, W)
+        self.segmentation_conv = nn.Conv2d(32, num_classes, kernel_size=1)
 
         # Depth Head
-        self.depth_conv = nn.Conv2d(32, 1, kernel_size=1)  # (B, 1, H, W)
+        self.depth_conv = nn.Conv2d(32, 1, kernel_size=1)
 
     def _conv_block(self, in_channels, out_channels):
         return nn.Sequential(
@@ -89,18 +84,9 @@ class Detector(torch.nn.Module):
 
     def _upconv_block(self, in_channels, out_channels):
         return nn.Sequential(
-            nn.ConvTranspose2d(in_channels, out_channels, kernel_size=3, stride=2, padding=1, output_padding=1),
+            nn.ConvTranspose2d(in_channels, out_channels, kernel_size=2, stride=2),
             nn.BatchNorm2d(out_channels),
             nn.ReLU()
-        )
-
-    def _se_block(self, channels, reduction=16):
-        return nn.Sequential(
-            nn.AdaptiveAvgPool2d(1),  # Squeeze: Global average pooling to reduce spatial dimensions to 1x1
-            nn.Conv2d(channels, channels // reduction, kernel_size=1),  # Excitation: First FC layer (1x1 convolution)
-            nn.ReLU(),  # Activation
-            nn.Conv2d(channels // reduction, channels, kernel_size=1),  # Excitation: Second FC layer (1x1 convolution)
-            nn.Sigmoid(),  # Sigmoid activation to produce channel-wise scaling factors
         )
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
@@ -108,39 +94,33 @@ class Detector(torch.nn.Module):
         z = (x - self.input_mean[None, :, None, None]) / self.input_std[None, :, None, None]
 
         # Encoder
-        e1 = self.encoder1(z)  # (B, 64, H/2, W/2)
-        e2 = self.encoder2(e1)  # (B, 128, H/4, W/4)
-        e3 = self.encoder3(e2)  # (B, 256, H/8, W/8)
-        e4 = self.encoder4(e3)  # (B, 512, H/16, W/16)
+        e1 = self.encoder1(z)
+        e2 = self.encoder2(e1)
+        e3 = self.encoder3(e2)
+        e4 = self.encoder4(e3)
 
-        # Decoder with skip connections and attention
-        d1 = self.decoder1(e4)  # (B, 256, H/8, W/8)
-        se1_output = self.se1(e3)  # (B, 256, 1, 1)
-        se1_output = F.interpolate(se1_output, size=d1.shape[2:], mode='bilinear', align_corners=False)  # Upsample to match d1
-        d1 = torch.cat([d1, se1_output], dim=1)  # Skip connection with e3 (256 channels)
+        # Decoder with skip connections
+        d1 = self.decoder1(e4)
+        d1 = torch.cat([d1, e3], dim=1)
 
-        d2 = self.decoder2(d1)  # (B, 128, H/4, W/4)
-        se2_output = self.se2(e2)  # (B, 128, 1, 1)
-        se2_output = F.interpolate(se2_output, size=d2.shape[2:], mode='bilinear', align_corners=False)  # Upsample to match d2
-        d2 = torch.cat([d2, se2_output], dim=1)  # Skip connection with e2 (128 channels)
+        d2 = self.decoder2(d1)
+        d2 = torch.cat([d2, e2], dim=1)
 
-        d3 = self.decoder3(d2)  # (B, 64, H/2, W/2)
-        se3_output = self.se3(e1)  # (B, 64, 1, 1)
-        se3_output = F.interpolate(se3_output, size=d3.shape[2:], mode='bilinear', align_corners=False)  # Upsample to match d3
-        d3 = torch.cat([d3, se3_output], dim=1)  # Skip connection with e1 (64 channels)
+        d3 = self.decoder3(d2)
+        d3 = torch.cat([d3, e1], dim=1)
 
-        d4 = self.decoder4(d3)  # (B, 32, H, W)
+        d4 = self.decoder4(d3)
 
         # Segmentation and Depth Heads
-        logits = self.segmentation_conv(d4)  # (B, num_classes, H, W)
-        raw_depth = self.depth_conv(d4)  # (B, 1, H, W)
+        logits = self.segmentation_conv(d4)
+        raw_depth = self.depth_conv(d4)
 
         return logits, raw_depth
 
     def predict(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         logits, raw_depth = self(x)
-        pred = logits.argmax(dim=1)  # (B, H, W)
-        depth = raw_depth.squeeze(1)  # (B, H, W)
+        pred = logits.argmax(dim=1)
+        depth = raw_depth.squeeze(1)
         return pred, depth
 
 MODEL_FACTORY = {
