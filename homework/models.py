@@ -66,11 +66,13 @@ class Detector(nn.Module):
         self.decoder2 = self._upconv_block(128 + 128, 64)  # (B, 64, H/2, W/2)
         self.decoder3 = self._upconv_block(64 + 64, 32)    # (B, 32, H, W)
 
-        # Segmentation Head
+        # Segmentation Head (Refined for better IoU)
         self.segmentation_head = nn.Sequential(
             nn.Conv2d(32, 64, kernel_size=3, padding=1),
             nn.ReLU(),
-            nn.Conv2d(64, num_classes, kernel_size=1)
+            nn.Conv2d(64, 128, kernel_size=3, padding=1),
+            nn.ReLU(),
+            nn.Conv2d(128, num_classes, kernel_size=1)
         )
 
         # Depth Head

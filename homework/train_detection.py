@@ -58,7 +58,7 @@ class GradientLoss(nn.Module):
 
 # Combined Loss (Segmentation + Depth + IoU + Gradient)
 class CombinedLoss(nn.Module):
-    def __init__(self, seg_weight=0.3, depth_weight=0.3, iou_weight=0.4, grad_weight=0.1):
+    def __init__(self, seg_weight=0.3, depth_weight=0.2, iou_weight=0.5, grad_weight=0.2):
         super(CombinedLoss, self).__init__()
         self.seg_loss = nn.CrossEntropyLoss()
         self.depth_loss = nn.L1Loss()
@@ -112,7 +112,7 @@ def train(model_name="detector", num_epoch=150, lr=1e-3, patience=20):
     model = Detector().to(device)
 
     # Loss function
-    criterion = CombinedLoss(seg_weight=0.3, depth_weight=0.3, iou_weight=0.4, grad_weight=0.1)
+    criterion = CombinedLoss(seg_weight=0.3, depth_weight=0.2, iou_weight=0.5, grad_weight=0.2)
 
     # Optimizer with weight decay
     optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
@@ -199,6 +199,5 @@ def train(model_name="detector", num_epoch=150, lr=1e-3, patience=20):
     print("Training complete!")
 
 
-# Ensure the train function is accessible
 if __name__ == "__main__":
     train(model_name="detector", num_epoch=150, lr=1e-3, patience=20)
