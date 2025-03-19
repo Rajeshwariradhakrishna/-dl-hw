@@ -130,16 +130,16 @@ class Detector(nn.Module):
         z = (x - self.input_mean[None, :, None, None]) / self.input_std[None, :, None, None]
 
         # Encoder
-        e1 = self.encoder1(z)  # 64 channels
-        e2 = self.encoder2(e1)  # 128 channels
-        e3 = self.encoder3(e2)  # 256 channels
+        e1 = self.encoder1(z)
+        e2 = self.encoder2(e1)
+        e3 = self.encoder3(e2)
 
         # Decoder with skip connections and attention gates
         d1 = self.decoder1(e3)
-        d1 = self.attention1(e2, d1)  # Pass e2 (128 channels) as gate
+        d1 = self.attention1(e2, d1)
 
         d2 = self.decoder2(d1)
-        d2 = self.attention2(e1, d2)  # Pass e1 (64 channels) as gate
+        d2 = self.attention2(e1, d2)
 
         d3 = self.decoder3(d2)
 
