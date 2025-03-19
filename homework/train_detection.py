@@ -49,7 +49,26 @@ class DiceLoss(nn.Module):
         return 1 - dice.mean()
 
 
-# Combined Segmentation Loss (IoU + Dice)
+# Focal Loss for Segmentation
+class FocalLoss(nn.Module):
+    def __init__(self, alpha=1, gamma=2, reduction='mean'):
+        super(FocalLoss, self).__init__()
+        self.alpha = alpha
+        self.gamma = gamma
+        self.reduction = reduction
+
+    def forward(self, preds, targets):
+        ce_loss = nn.CrossEntropyLoss(reduction='none')(preds, targets)
+        pt = torch.exp(-ce_loss)
+        focal_loss = self.alpha * (1 - pt) ** self.gamma * ce_loss
+
+        if self.reduction == 'mean':
+            return focal_loss.mean()
+        elif self.reduction == 'sum':
+            return focal_loss.sum()
+        return focal_loss
+
+
 # Combined Segmentation Loss (IoU + Dice + Focal)
 class CombinedSegmentationLoss(nn.Module):
     def __init__(self, iou_weight=0.4, dice_weight=0.4, focal_weight=0.2):
@@ -68,6 +87,21 @@ class CombinedSegmentationLoss(nn.Module):
         return self.iou_weight * iou_loss + self.dice_weight * dice_loss + self.focal_weight * focal_loss
 
 
+# Depth Loss (L1 + MSE + False Positive Penalty)
+class DepthLoss(nn.Module):
+    def __init__(self, l1_weight=0.7, mse_weight=0.2, fp_weight=0.1):
+        super(DepthLoss, self).__init__()
+        self.l1_loss = nn.L1Loss()
+        self.mse_loss = nn.MSELoss()
+        self.fp_weight = fp_weight
+
+    def forward(self, preds, targets):
+        l1_loss = self.l1_loss(preds, targets)
+        mse_loss = self.mse_loss(preds, targets)
+        fp_loss = torch.mean(torch.relu(preds - targets))  # Penalize false positives
+        return l1_loss + mse_loss + self.fp_weight * fp_loss
+
+
 # Training Function
 def train(model_name="detector", num_epoch=50, lr=1e-3, patience=10):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -81,7 +115,7 @@ def train(model_name="detector", num_epoch=50, lr=1e-3, patience=10):
 
     # Loss functions
     criterion_segmentation = CombinedSegmentationLoss(iou_weight=0.4, dice_weight=0.4, focal_weight=0.2)
-    criterion_depth = nn.L1Loss()  # Use L1 loss for depth
+    criterion_depth = DepthLoss(l1_weight=0.7, mse_weight=0.2, fp_weight=0.1)
 
     # Optimizer with weight decay
     optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
@@ -169,3 +203,7 @@ def train(model_name="detector", num_epoch=50, lr=1e-3, patience=10):
         scheduler.step()
 
     print("Training complete!")
+
+
+if __name__ == "__main__":
+    train(model_name="detector", num_epoch=50, lr=1e-3, patience=10)
