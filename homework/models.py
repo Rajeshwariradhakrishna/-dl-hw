@@ -56,22 +56,22 @@ class Detector(torch.nn.Module):
         self.register_buffer("input_std", torch.as_tensor(INPUT_STD))
 
         # Encoder
-        self.encoder1 = self._conv_block(in_channels, 32)  # (B, 32, H/2, W/2)
-        self.encoder2 = self._conv_block(32, 64)          # (B, 64, H/4, W/4)
-        self.encoder3 = self._conv_block(64, 128)         # (B, 128, H/8, W/8)
-        self.encoder4 = self._conv_block(128, 256)        # (B, 256, H/16, W/16)
+        self.encoder1 = self._conv_block(in_channels, 64)  # (B, 64, H/2, W/2)
+        self.encoder2 = self._conv_block(64, 128)          # (B, 128, H/4, W/4)
+        self.encoder3 = self._conv_block(128, 256)         # (B, 256, H/8, W/8)
+        self.encoder4 = self._conv_block(256, 512)         # (B, 512, H/16, W/16)
 
-        # Decoder
-        self.decoder1 = self._upconv_block(256, 128)      # (B, 128, H/8, W/8)
-        self.decoder2 = self._upconv_block(128, 64)       # (B, 64, H/4, W/4)
-        self.decoder3 = self._upconv_block(64, 32)        # (B, 32, H/2, W/2)
-        self.decoder4 = self._upconv_block(32, 16)        # (B, 16, H, W)
+        # Decoder with skip connections
+        self.decoder1 = self._upconv_block(512, 256)       # (B, 256, H/8, W/8)
+        self.decoder2 = self._upconv_block(256 + 256, 128) # (B, 128, H/4, W/4)
+        self.decoder3 = self._upconv_block(128 + 128, 64)  # (B, 64, H/2, W/2)
+        self.decoder4 = self._upconv_block(64 + 64, 32)    # (B, 32, H, W)
 
         # Segmentation Head
-        self.segmentation_conv = nn.Conv2d(16, num_classes, kernel_size=1)  # (B, num_classes, H, W)
+        self.segmentation_conv = nn.Conv2d(32, num_classes, kernel_size=1)  # (B, num_classes, H, W)
 
         # Depth Head
-        self.depth_conv = nn.Conv2d(16, 1, kernel_size=1)  # (B, 1, H, W)
+        self.depth_conv = nn.Conv2d(32, 1, kernel_size=1)  # (B, 1, H, W)
 
     def _conv_block(self, in_channels, out_channels):
         return nn.Sequential(
@@ -93,16 +93,22 @@ class Detector(torch.nn.Module):
         z = (x - self.input_mean[None, :, None, None]) / self.input_std[None, :, None, None]
 
         # Encoder
-        e1 = self.encoder1(z)  # (B, 32, H/2, W/2)
-        e2 = self.encoder2(e1)  # (B, 64, H/4, W/4)
-        e3 = self.encoder3(e2)  # (B, 128, H/8, W/8)
-        e4 = self.encoder4(e3)  # (B, 256, H/16, W/16)
+        e1 = self.encoder1(z)  # (B, 64, H/2, W/2)
+        e2 = self.encoder2(e1)  # (B, 128, H/4, W/4)
+        e3 = self.encoder3(e2)  # (B, 256, H/8, W/8)
+        e4 = self.encoder4(e3)  # (B, 512, H/16, W/16)
 
-        # Decoder
-        d1 = self.decoder1(e4)  # (B, 128, H/8, W/8)
-        d2 = self.decoder2(d1)  # (B, 64, H/4, W/4)
-        d3 = self.decoder3(d2)  # (B, 32, H/2, W/2)
-        d4 = self.decoder4(d3)  # (B, 16, H, W)
+        # Decoder with skip connections
+        d1 = self.decoder1(e4)  # (B, 256, H/8, W/8)
+        d1 = torch.cat([d1, e3], dim=1)  # Skip connection with e3 (256 channels)
+
+        d2 = self.decoder2(d1)  # (B, 128, H/4, W/4)
+        d2 = torch.cat([d2, e2], dim=1)  # Skip connection with e2 (128 channels)
+
+        d3 = self.decoder3(d2)  # (B, 64, H/2, W/2)
+        d3 = torch.cat([d3, e1], dim=1)  # Skip connection with e1 (64 channels)
+
+        d4 = self.decoder4(d3)  # (B, 32, H, W)
 
         # Segmentation and Depth Heads
         logits = self.segmentation_conv(d4)  # (B, num_classes, H, W)
